@@ -1,0 +1,48 @@
+{
+  "range": {
+    "from": "2026-09-24T19:00:00.000Z",
+    "to": "2026-09-25T12:44:31.752Z"
+  },
+  "totals": {
+    "total": 450,
+    "count": 2
+  },
+  "previous": {
+    "total": 0,
+    "count": 0
+  },
+  "changePercent": null,
+  "trend": [
+    {
+      "date": "2026-09-25",
+      "total": 450,
+      "count": 2
+    }
+  ],
+  "topSuppliers": [
+    {
+      "supplierId": "b6220329-f9ba-4ef4-8395-8dce97c71f45",
+      "supplierName": "Supplier One",
+      "total": 450,
+      "count": 2
+    }
+  ],
+  "payables": {
+    "totalOutstanding": 300,
+    "overdueAmount": 0,
+    "agingBuckets": {
+      "0-30": 300,
+      "31-60": 0,
+      "61-90": 0,
+      "90+": 0
+    },
+    "topCreditors": [
+      {
+        "supplierId": "b6220329-f9ba-4ef4-8395-8dce97c71f45",
+        "supplierName": "Supplier One",
+        "amountDue": 300,
+        "daysOverdue": 0
+      }
+    ]
+  }
+}

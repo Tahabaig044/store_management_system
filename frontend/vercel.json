@@ -1,0 +1,10 @@
+{
+  "rewrites": [
+    { "source": "/BizOS/assets/:path*", "destination": "/assets/:path*" },
+    { "source": "/BizOS/favicon.svg", "destination": "/favicon.svg" },
+    { "source": "/BizOS/icons.svg", "destination": "/icons.svg" },
+    { "source": "/BizOS/manifest.webmanifest", "destination": "/manifest.webmanifest" },
+    { "source": "/BizOS/service-worker.js", "destination": "/service-worker.js" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
+}

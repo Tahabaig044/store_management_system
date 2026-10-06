@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 12+ cloud backup / device-transfer rules. The Owner Mobile app
+  stores nothing worth restoring on a new device except the session token
+  (which should never survive a device transfer - the owner just signs back
+  in), so everything is excluded.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" />
+    </device-transfer>
+</data-extraction-rules>

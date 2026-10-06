@@ -1,0 +1,102 @@
+# Production stack: one VPS, one persistent Node process.
+#   Caddy (HTTPS) -> /api/* -> backend (Express, SSE realtime) ; everything else -> frontend (nginx SPA)
+#   postgres (private network only) ; backup (daily pg_dump with retention)
+# Usage: cp .env.production.example .env ; edit ; docker compose -f docker-compose.prod.yml --env-file .env up -d --build
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: akvf
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: akvisionflow
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U akvf -d akvisionflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # No published ports: reachable only by the other services on this network.
+
+  backend:
+    build: ../backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DATABASE_URL: postgresql://akvf:${POSTGRES_PASSWORD}@postgres:5432/akvisionflow?schema=public
+      DIRECT_URL: postgresql://akvf:${POSTGRES_PASSWORD}@postgres:5432/akvisionflow?schema=public
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}
+      JWT_EXPIRES_IN: 8h
+      CORS_ORIGINS: https://${APP_DOMAIN:?set APP_DOMAIN}
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+      APP_URL: https://${APP_DOMAIN}
+      # Who may create a business account: set an invitation code, or SIGNUP_OPEN=true. Neither = registration closed.
+      SIGNUP_INVITE_CODE: ${SIGNUP_INVITE_CODE:-}
+      SIGNUP_OPEN: ${SIGNUP_OPEN:-false}
+      # Optional SMTP for self-service password reset emails (admins can always issue reset links).
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  frontend:
+    build:
+      context: ../frontend
+      args:
+        VITE_API_URL: /api
+    restart: unless-stopped
+    depends_on:
+      - backend
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - backend
+      - frontend
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+  backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGUSER: akvf
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: akvisionflow
+      BACKUP_DIR: /backups
+      BACKUP_INTERVAL_HOURS: ${BACKUP_INTERVAL_HOURS:-24}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+    volumes:
+      - ./scripts:/scripts:ro
+      - backups:/backups
+    entrypoint: ["sh", "/scripts/backup-loop.sh"]
+
+volumes:
+  pgdata:
+  backups:
+  caddy_data:
+  caddy_config:

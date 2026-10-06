@@ -1,0 +1,53 @@
+# AK VisionFlow V1 — Security Audit (Phase 3)
+
+Evidence labels: **VERIFIED** (checked by a test or direct probe in this phase), **PARTIAL**, **NOT VERIFIED**.
+
+## Authentication and accounts
+
+| Area | Result |
+|---|---|
+| Password policy | VERIFIED. One policy everywhere (registration, user create/edit, reset, change): 8–72 chars, a letter and a number. 72 = bcrypt's real limit. |
+| Forgot / reset password | VERIFIED. Tokens are 256-bit, only the SHA-256 is stored, expire in 1 h (admin-issued: 24 h), single use even under concurrent submission, all other links die on use. Known and unknown emails get the identical response; unknown email costs the same time as a wrong password. |
+| Email delivery | Honest. Needs SMTP (`SMTP_*`). Without it `/auth/forgot-password` answers 503 `EMAIL_NOT_CONFIGURED` and the UI says to ask an administrator. Tenant admins can always issue a one-time reset link (Users → Reset link), which needs no provider. |
+| Sessions | VERIFIED. Deactivated users lose access on the next request (existing). New: a password change/reset/admin-set signs out every other session (`passwordChangedAt`, checked for staff and mobile tokens). |
+| Login | Fixed a real defect: emails are unique only *per tenant* but login took an arbitrary first match, so a same-email account in another tenant could lock a user out. Login now chooses among active accounts by password; registration and user creation refuse an email already used anywhere. |
+| Sign-up policy | VERIFIED, now intentional and fail-closed: in production registration is **closed** unless `SIGNUP_INVITE_CODE` (invite) or `SIGNUP_OPEN=true` (open) is set. Development/test stay open. |
+| Brute force | Login/register share 20 attempts / 15 min / IP; password recovery has its own 10 / 15 min bucket; portal OTP and mobile login have their own limits; all other API calls 300 / min per user. |
+| JWT | HS256 pinned (`alg:none` and garbage tokens rejected — tested). Production refuses the placeholder secret and any secret shorter than 32 characters. |
+
+## Tenant, branch and permission isolation
+
+* **VERIFIED (static sweep):** of all route files, the only endpoints without authentication are `register-tenant`, `login`, `config`, `forgot-password`, `reset-password`, portal `request-otp` / `verify-otp`, mobile login/health and `/api/health`. Everything else authenticates.
+* **VERIFIED (static sweep):** no query looks a record up by `req.params` id without tenant scope. The remaining id-only lookups are follow-ups on rows already validated as tenant-owned in the same request.
+* Cross-tenant foreign-key payloads (IDOR), RBAC per role, branch and warehouse scoping: covered by the existing 978-test backend regression (`business`, `*Management`, `multiBranch`, `mobile*`, `receivablesPayables` etc.), re-run at the end of this phase.
+
+## Transport, headers, errors
+
+* CORS is an explicit allowlist — a foreign origin receives no `Access-Control-Allow-Origin` (tested).
+* Helmet on the API; the proxy (Caddy) adds HSTS, `nosniff`, `X-Frame-Options: DENY`, Referrer-Policy. **NOT VERIFIED live** (needs a deployed server).
+* Fixed: malformed JSON and oversized bodies returned **500** (and would have raised operator alerts). They now return 400 / 413.
+* Error responses never carry stack traces, SQL or secrets (tested for the health check and bad input).
+* `npm audit --omit=dev`: 0 vulnerabilities (backend and frontend).
+
+## Audit logging
+
+Password reset, password change and admin reset-link issuance are written to the audit log (the token itself is never logged — tested). Existing coverage: 43 route modules call `logAudit`.
+
+## Honest integrations (no fake "delivered")
+
+| Feature | V1 decision |
+|---|---|
+| WhatsApp messaging, automation | The only provider implemented is a mock. In production the mock is replaced by a "not configured" provider: messages are recorded once as **FAILED** with an explicit reason (never SENT, no retry loop). The Communication Center and Automation Rules pages show a warning banner. |
+| Customer portal login (OTP over WhatsApp) | Refused in production with 503 `PORTAL_UNAVAILABLE` and no code is created; the portal login page says sign-in is unavailable. |
+| Owner push notifications | Same replacement. A push that cannot be delivered no longer deactivates the owner's registered device. The Android app pulls alerts from the API (no push claim in its UI), so nothing it shows depends on push. |
+| Staging exception | `ALLOW_MOCK_PROVIDERS=true` re-enables the mocks for a staging server only. |
+
+Connecting a real provider later means adding a provider module to each registry; nothing else changes.
+
+## Known limitations (accepted for V1)
+
+1. Web session token lives in `localStorage`, so an XSS bug would expose it. Mitigation today: React escaping and no `dangerouslySetInnerHTML` / `eval` in the frontend; the one `innerHTML` use (barcode label printing in `Products.jsx`) assigns SVG generated by JsBarcode from the product's barcode value — its escaping was not independently verified.
+2. No per-account lockout or 2FA; brute force is throttled per IP only. bcrypt cost 12 slows guessing.
+3. Owner mobile tokens last 30 days; they are still re-validated against the database on every request and die on deactivation or password change.
+4. Rate-limit counters and the realtime stream are per process — correct for the single-instance deployment chosen in `DEPLOYMENT.md`, not for horizontal scaling.
+5. No penetration test tooling was run; this is a code and behaviour audit.

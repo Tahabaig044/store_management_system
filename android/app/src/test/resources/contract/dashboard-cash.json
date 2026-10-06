@@ -1,0 +1,51 @@
+{
+  "range": {
+    "from": "2026-09-24T19:00:00.000Z",
+    "to": "2026-09-25T12:44:31.792Z"
+  },
+  "cash": {
+    "openingBalance": 0,
+    "receipts": 550,
+    "payments": 970,
+    "closingBalance": -420
+  },
+  "bank": {
+    "openingBalance": 0,
+    "receipts": 40,
+    "payments": 0,
+    "closingBalance": 40
+  },
+  "totals": {
+    "openingBalance": 0,
+    "receipts": 590,
+    "payments": 970,
+    "closingBalance": -380
+  },
+  "netChange": -380,
+  "bySource": [
+    {
+      "source": "EXPENSE",
+      "net": -800
+    },
+    {
+      "source": "SALE",
+      "net": 340
+    },
+    {
+      "source": "EXPENSE_REVERSAL",
+      "net": 200
+    },
+    {
+      "source": "PURCHASE",
+      "net": -150
+    },
+    {
+      "source": "PAYMENT",
+      "net": 50
+    },
+    {
+      "source": "PAYMENT_REVERSAL",
+      "net": -20
+    }
+  ]
+}

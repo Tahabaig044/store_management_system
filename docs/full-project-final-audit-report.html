@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>AK VisionFlow — Full Project Final Audit Report</title>
+<style>
+  @page { size: A4; margin: 22mm 18mm; }
+  body { font-family: Georgia, 'Times New Roman', serif; color: #1a1a1a; line-height: 1.55; font-size: 12px; }
+  h1 { font-size: 22px; margin-bottom: 2px; border-bottom: 3px solid #1e3a5f; padding-bottom: 10px; }
+  .subtitle { color: #555; font-size: 13px; margin-top: 4px; margin-bottom: 22px; }
+  h2 { font-size: 15px; color: #1e3a5f; border-bottom: 1px solid #ccc; padding-bottom: 4px; margin-top: 28px; page-break-after: avoid; }
+  h3 { font-size: 12.5px; color: #1e3a5f; margin-top: 16px; page-break-after: avoid; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 10.6px; }
+  th, td { border: 1px solid #ccc; padding: 5px 8px; text-align: left; vertical-align: top; }
+  th { background: #1e3a5f; color: #fff; }
+  tr:nth-child(even) { background: #f4f6f8; }
+  code { background: #eef1f4; padding: 1px 5px; border-radius: 3px; font-family: Consolas, monospace; font-size: 10.5px; }
+  .verdict-box { background: #eafaf0; border: 2px solid #1e8a4c; border-radius: 6px; padding: 16px 20px; margin-top: 14px; }
+  .disclosure { background: #fff8e6; border-left: 4px solid #d9a300; padding: 10px 16px; margin: 12px 0; }
+  .phase-box { border: 1px solid #ccc; border-radius: 6px; padding: 12px 16px; margin: 10px 0; background: #fafbfc; page-break-inside: avoid; }
+  .phase-box h3 { margin-top: 0; }
+  .status-closed { color: #1e8a4c; font-weight: bold; }
+  .status-conditions { color: #a06a00; font-weight: bold; }
+  .footer { margin-top: 40px; font-size: 10px; color: #888; border-top: 1px solid #ccc; padding-top: 10px; }
+  ul { margin-top: 4px; }
+  .toc { background: #f4f6f8; border: 1px solid #ccc; border-radius: 6px; padding: 14px 20px; }
+  .toc a { color: #1e3a5f; text-decoration: none; }
+</style>
+</head>
+<body>
+
+<h1>AK VisionFlow — Full Project Final Audit Report</h1>
+<div class="subtitle">Universal Architecture &amp; Refactoring Program · Phases 0.1 – 0.8 · Prepared for client delivery/handover · September 18, 2026</div>
+
+<div class="toc">
+<strong>Contents:</strong>
+<ol>
+<li><a href="#scope">Scope and Method</a></li>
+<li><a href="#phases">Phase-by-Phase Summary (0.1 – 0.8)</a></li>
+<li><a href="#matrix">Cross-Phase Architecture Verification Matrix</a></li>
+<li><a href="#tests">Consolidated Test Evidence</a></li>
+<li><a href="#security">Security &amp; Authorization Findings</a></li>
+<li><a href="#db">Database &amp; Migration Consistency</a></li>
+<li><a href="#conditions">Accepted Conditions and Backlog Items</a></li>
+<li><a href="#readiness">Production Readiness</a></li>
+<li><a href="#verdict">Final Verdict</a></li>
+</ol>
+</div>
+
+<h2 id="scope">1. Scope and Method</h2>
+<p>This report covers the complete "Phase 0 — Universal Architecture &amp; Refactoring" program: an eight-part effort to re-architect AK VisionFlow (the Khalid Eye Clinic system) from a single-industry optical/eyecare application into a universal, multi-tenant business platform capable of supporting additional industries later, without breaking anything the clinic already relies on today.</p>
+<p>Every phase followed the same disciplined process: read the approved specification, inspect the existing code before touching it, implement, test, independently audit the result, fix anything found, retest, run a full regression of the entire application, and produce written evidence — then stop for explicit approval before starting the next phase. No phase proceeded without that approval. This report is a synthesis of all eight phases' own detailed, evidence-based reports (available individually in the project's <code>docs/</code> folder), re-verified together as a whole in Phase 0.8.</p>
+
+<h2 id="phases">2. Phase-by-Phase Summary</h2>
+
+<div class="phase-box">
+<h3>0.1 — Existing System Audit &amp; Feature Mapping <span class="status-closed">CLOSED</span></h3>
+<p>A ground-truth audit of the system as it stood before any changes: a full database map, three API maps, a UI map, an Android app map, a test-coverage matrix, a feature-classification matrix, and a refactoring backlog — every claim checked directly against the code, nothing assumed. This audit is what every later phase was measured against, and it is what first discovered that the Owner Android app's backend had been quietly paused (see Phase 0.7).</p>
+</div>
+
+<div class="phase-box">
+<h3>0.2 — Universal Product Architecture <span class="status-closed">CLOSED</span></h3>
+<p>Replaced the old assumption that every product is either an optical item or a medicine with a universal product model: a neutral core (name, price, stock, unit) plus optional industry-specific attribute tables for Optical and Medicine details, and a new product-variant capability. Every existing product was safely migrated and backfilled with zero data loss, and the optical and pharmacy screens continued to work exactly as before.</p>
+</div>
+
+<div class="phase-box">
+<h3>0.3 — Multi-Tenant / Company / Branch Architecture <span class="status-closed">CLOSED</span></h3>
+<p>Introduced a "Company" layer between Tenant and Branch, so a business that operates more than one legal entity can be represented properly — while a business that only ever needed one branch sees no change at all. Twelve pre-existing gaps in branch-level data access were found and closed in the same pass (warehouses, stock transfers, procurement, journal entries, and several reports).</p>
+</div>
+
+<div class="phase-box">
+<h3>0.4 — Permissions, RBAC &amp; Authorization Architecture <span class="status-closed">CLOSED</span></h3>
+<p>Replaced scattered, hand-coded "which roles can do this" checks with one centralized permission system: a single catalog defining every action in the system and which staff roles may perform it, enforced consistently everywhere. Ultimately covered 25 resource types and 75 individual permissions across 239 role grants, migrated across roughly 40 backend modules without changing a single existing role's actual access — verified by direct comparison against the original behavior, not just by assumption. A safeguard was added so that no user, including an administrator, can ever grant themselves higher privileges.</p>
+</div>
+
+<div class="phase-box">
+<h3>0.5 — Core vs Industry Module Architecture <span class="status-conditions">CLOSED WITH CONDITIONS</span></h3>
+<p>Formally separated the parts of the system every business needs (products, customers, sales, purchases, accounting, etc.) from the parts specific to the optical/eyecare industry. Built a real, enforced "module registry" so an industry-specific feature can actually be switched on or off per business — this did not exist before; the settings previously only changed what fields appeared on a form, they didn't control real access. A tenant administrator can now genuinely enable or disable the Optical module for their business. Three minor, low-risk items were knowingly deferred rather than fixed immediately (see Section 7) and were accepted as conditions by the client.</p>
+</div>
+
+<div class="phase-box">
+<h3>0.6 — API &amp; Backend Architecture <span class="status-closed">CLOSED</span></h3>
+<p>A housekeeping pass across the whole backend: four separate pieces of logic that had been copy-pasted across dozens of files (page-number handling, date-range filters, invoice/order numbering, and duplicate-submission protection) were consolidated into shared, single-source utilities — reducing future bug risk with zero change in behavior, verified by full regression. One real security gap was found and fixed in the process: the basic owner dashboard was showing company-wide sales totals to branch-restricted staff instead of just their own branch's figures.</p>
+</div>
+
+<div class="phase-box">
+<h3>0.7 — Existing Owner Android Compatibility <span class="status-closed">CLOSED</span></h3>
+<p>The Owner Android app (the mobile app previously built for the business owner to check sales, alerts, and AI-driven insights from their phone) had been paused mid-way through its own development, before this program began. This phase determined exactly what still worked, what needed adjustment, and what should stay deferred — then restored the app to a fully working, fully tested state <em>without switching it on for real use</em>. Two genuine defects left over from how the app had been paused were found and fixed: the backend database definition did not match what had actually been built, and a scheduled job that was supposed to send push notifications had been silently disconnected. Per the client's explicit instruction, this app remains off for real tenants and devices until a future phase is explicitly asked to turn it on.</p>
+</div>
+
+<div class="phase-box">
+<h3>0.8 — Architecture Testing &amp; Approval <span class="status-closed">APPROVED WITH CONDITIONS</span></h3>
+<p>The final gate: a complete, fresh, whole-program re-verification of everything above, run together rather than phase by phase — including, for the first time, running the entire backend test suite (all 415 tests) against a database built completely from scratch, to prove the full migration history applies cleanly with no leftover inconsistency. No new features were added and no changes were made "to improve the score" — this phase's job was strictly to verify, and it found no blocking issues. Full results are in Section 4.</p>
+</div>
+
+<h2 id="matrix">3. Cross-Phase Architecture Verification Matrix</h2>
+<table>
+<tr><th>Area</th><th>Status</th><th>Basis</th></tr>
+<tr><td>Universal Product Architecture</td><td>Verified</td><td>Automated test suite passing; industry-specific fields confirmed unaffected</td></tr>
+<tr><td>Tenant → Company → Branch → Warehouse hierarchy</td><td>Verified</td><td>Dedicated isolation test suites passing</td></tr>
+<tr><td>Centralized permissions (RBAC)</td><td>Verified</td><td>33 dedicated authorization tests passing; every frontend permission check cross-checked against the backend catalog with zero mismatches</td></tr>
+<tr><td>Core vs Industry Module separation</td><td>Verified</td><td>Confirmed the universal core has zero dependency on optical-specific code, including a live test proving the core keeps working with the Optical module switched off entirely</td></tr>
+<tr><td>Module registry and activation</td><td>Verified</td><td>24 registered modules (Core/Universal/Industry); real on/off enforcement confirmed by test</td></tr>
+<tr><td>API &amp; backend architecture</td><td>Verified</td><td>Duplication removed from 44 file-level instances across four categories; one authorization gap found and closed</td></tr>
+<tr><td>Owner Android compatibility</td><td>Verified (restored, not activated)</td><td>Full backend and Android test suites passing; app remains switched off for real use</td></tr>
+<tr><td>Cross-tenant / company / branch / warehouse isolation</td><td>Verified</td><td>Dedicated isolation tests across every module family</td></tr>
+<tr><td>Optical/Medical functionality</td><td>Verified — zero regression</td><td>Full clinical workflow test suite (32 tests: patients, appointments, examinations, prescriptions, optical orders, labs) passing throughout every phase</td></tr>
+<tr><td>Database/schema/migration consistency</td><td>Verified</td><td>Full migration history applies cleanly to a brand-new database with zero conflicts or drift</td></tr>
+<tr><td>Frontend/backend authorization consistency</td><td>Verified</td><td>Every permission referenced in the user interface exists, unchanged, in the backend's authorization catalog</td></tr>
+<tr><td>Test-environment safety</td><td>Verified</td><td>Every test throughout the program ran against disposable local test databases; production was never written to</td></tr>
+</table>
+
+<h2 id="tests">4. Consolidated Test Evidence (Phase 0.8 final re-verification)</h2>
+<table>
+<tr><th>Suite</th><th>Result</th><th>Notes</th></tr>
+<tr><td>Backend — full regression, including the Owner Android backend</td><td><strong>415 / 415 tests passed</strong> (18 of 18 suites)</td><td>Run against a database built entirely from scratch for this check</td></tr>
+<tr><td>Frontend — automated tests</td><td><strong>76 / 76 tests passed</strong> (19 of 19 files)</td><td>&nbsp;</td></tr>
+<tr><td>Frontend — code-quality check</td><td><strong>Clean</strong> — no new issues</td><td>&nbsp;</td></tr>
+<tr><td>Frontend — production build</td><td><strong>Succeeds cleanly</strong></td><td>&nbsp;</td></tr>
+<tr><td>Owner Android app — automated unit tests</td><td><strong>58 / 58 tests passed</strong></td><td>Fresh, forced-clean build (not a cached/reused result)</td></tr>
+<tr><td>Owner Android app — code-quality check (lint)</td><td><strong>No issues found</strong></td><td>&nbsp;</td></tr>
+<tr><td>Owner Android app — build</td><td><strong>Succeeds</strong>; installable app file produced</td><td>&nbsp;</td></tr>
+<tr><td>Owner Android app — on-device/emulator testing</td><td><strong>Not performed</strong></td><td>No physical Android device and no working emulator are available in this project's current environment. This is disclosed rather than assumed — see Section 8.</td></tr>
+</table>
+<p>One transient, environment-level hiccup was investigated during this final round: an occasional "database connection" error appeared in a handful of test runs, always resolving cleanly on an immediate retry, never a genuine logic problem. This was traced conclusively to the local test-database software used purely for development testing occasionally taking a moment to accept a brand-new connection — a characteristic of the local testing tool, not of the application, and never observed against anything resembling production.</p>
+
+<h2 id="security">5. Security &amp; Authorization Findings</h2>
+<ul>
+<li>No cross-tenant data leakage found anywhere in the system — verified by dedicated adversarial tests attempting exactly that, across every module.</li>
+<li>No self-privilege-escalation path exists — a user, including an administrator, cannot grant themselves higher access.</li>
+<li>Two real authorization gaps were found and closed during this program (a set of branch-visibility gaps in Phase 0.1/0.3, and one dashboard-scoping gap in Phase 0.6) — both are now covered by automated tests that will fail if either regresses.</li>
+<li>The Owner Android app's security posture (encrypted on-device token storage, enforced HTTPS in release builds, no logged credentials, minimal device permissions) was independently reviewed and found sound; see the separate Owner Android App Final Audit Report for full detail.</li>
+</ul>
+
+<h2 id="db">6. Database &amp; Migration Consistency</h2>
+<p>Every schema change made across all eight phases was verified to apply cleanly, in the correct order, to a database built completely from nothing — this is the strongest possible check that the migration history is internally consistent and that a fresh production environment (or a disaster-recovery restore) would come up correctly. One inconsistency was found and corrected during Phase 0.7: a database change belonging to the paused Owner Android work had, it turned out, already been quietly present in every test database used throughout this program, but the system's own internal definition of its data model had never been updated to match it. This has been corrected; it was never applied to the production database, and still has not been.</p>
+
+<h2 id="conditions">7. Accepted Conditions and Backlog Items</h2>
+<p>The following are <strong>known, deliberately deferred items — not defects</strong>. Each was explicitly reviewed and accepted by the client at the time its phase closed, and none is scheduled to be revisited unless a future phase specifically calls for it.</p>
+<table>
+<tr><th>#</th><th>Item</th><th>Why deferred</th></tr>
+<tr><td>1</td><td>The Optical retail workflow and the Eye-Clinic clinical workflow are switched on/off together as one module, not two independent ones</td><td>They are directly linked in the current data model (an optical order can reference a clinical prescription); splitting them would be a significant data-model change with no current business need</td></tr>
+<tr><td>2</td><td>The AI insights engine and the WhatsApp/communication engine are not individually restricted by the new module on/off system</td><td>Both simply show nothing for a business with no optical activity — there is no data-leak risk, only an unenforced (and currently unnecessary) boundary</td></tr>
+<tr><td>3</td><td>One inactive, unused ledger account entry related to Optical revenue remains in the universal accounting setup regardless of whether Optical is switched on</td><td>It is never actually created for a business that doesn't use it; removing the label itself would require a larger, currently unjustified change to the accounting engine</td></tr>
+<tr><td>4</td><td>The Owner Android app remains switched off for real tenants and devices</td><td>Restored to a fully working, fully tested state, but deliberately not activated per the client's explicit instruction — activation is reserved for a future phase</td></tr>
+</table>
+
+<h2 id="readiness">8. Production Readiness</h2>
+<table>
+<tr><th>Item</th><th>Status</th></tr>
+<tr><td>Universal Core, Company/Branch/Warehouse hierarchy, RBAC, Core/Industry separation</td><td>Verified and in active use today</td></tr>
+<tr><td>Optical/Medical (clinic) functionality</td><td>Verified, fully regression-tested, unchanged in behavior</td></tr>
+<tr><td>Owner Android app — code correctness</td><td>Verified locally; not deployed</td></tr>
+<tr><td>Owner Android app — database change applied to production</td><td>Not yet done — requires client authorization</td></tr>
+<tr><td>Owner Android app — production server address, real push notification service</td><td>Not yet configured</td></tr>
+<tr><td>Owner Android app — on-device verification</td><td>Not yet possible in any environment available to this project</td></tr>
+</table>
+<p>The web application (the system used day-to-day by clinic staff) is the subject of this entire program and is verified, tested, and already in its current working state — this report does not identify any reason it cannot continue to be used as it is today. The remaining items above are specific to the separately-scoped Owner Android app, which is intentionally not part of daily operations yet.</p>
+
+<h2 id="verdict">9. Final Verdict</h2>
+<div class="verdict-box">
+🟢 <strong>APPROVED WITH CONDITIONS — READY FOR PHASE 1</strong><br><br>
+Every architectural area reviewed across this eight-part program is verified, with fresh, complete, evidence-based testing behind it: 415 of 415 backend tests, 76 of 76 frontend tests, and 58 of 58 Owner Android tests, all passing, run against a database built from scratch to prove there is no hidden inconsistency. No blocking issues were found. The four items listed in Section 7 are accepted, previously-approved conditions carried forward as known context for future work — not open problems requiring resolution before proceeding. The system is ready for the next phase of development.
+</div>
+
+<div class="footer">AK VisionFlow — Full Project Final Audit Report (Phase 0.1 – 0.8) · Generated September 18, 2026</div>
+
+</body>
+</html>

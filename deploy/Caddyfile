@@ -1,0 +1,24 @@
+# HTTPS is automatic (Let's Encrypt) once APP_DOMAIN's DNS points at this server.
+{$APP_DOMAIN} {
+	encode gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(self), microphone=(), geolocation=()"
+		-Server
+	}
+
+	handle /api/* {
+		# flush_interval -1: do not buffer, so Server-Sent Events (/api/sync/events) reach the browser immediately.
+		reverse_proxy backend:4000 {
+			flush_interval -1
+		}
+	}
+
+	handle {
+		reverse_proxy frontend:80
+	}
+}

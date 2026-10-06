@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Owner Android App — Final Project Audit</title>
+<style>
+  @page { size: A4; margin: 22mm 18mm; }
+  body { font-family: Georgia, 'Times New Roman', serif; color: #1a1a1a; line-height: 1.55; font-size: 12px; }
+  h1 { font-size: 22px; margin-bottom: 2px; border-bottom: 3px solid #1e3a5f; padding-bottom: 10px; }
+  .subtitle { color: #555; font-size: 13px; margin-top: 4px; margin-bottom: 22px; }
+  h2 { font-size: 15px; color: #1e3a5f; border-bottom: 1px solid #ccc; padding-bottom: 4px; margin-top: 26px; page-break-after: avoid; }
+  h3 { font-size: 12.5px; color: #1e3a5f; margin-top: 16px; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 10.8px; }
+  th, td { border: 1px solid #ccc; padding: 5px 8px; text-align: left; vertical-align: top; }
+  th { background: #1e3a5f; color: #fff; }
+  tr:nth-child(even) { background: #f4f6f8; }
+  code { background: #eef1f4; padding: 1px 5px; border-radius: 3px; font-family: Consolas, monospace; font-size: 10.5px; }
+  pre { background: #1e1e1e; color: #d4d4d4; padding: 12px; border-radius: 5px; font-size: 10px; overflow-x: auto; white-space: pre-wrap; }
+  .verdict-box { background: #fff8e6; border: 2px solid #d9a300; border-radius: 6px; padding: 16px 20px; margin-top: 14px; }
+  .disclosure { background: #fff8e6; border-left: 4px solid #d9a300; padding: 10px 16px; margin: 12px 0; }
+  .addendum { background: #eef2f7; border: 2px solid #1e3a5f; border-radius: 6px; padding: 16px 20px; margin-top: 30px; }
+  .footer { margin-top: 40px; font-size: 10px; color: #888; border-top: 1px solid #ccc; padding-top: 10px; }
+  ul { margin-top: 4px; }
+</style>
+</head>
+<body>
+
+<h1>Owner Android App V1 — Final Project Audit</h1>
+<div class="subtitle">AK VisionFlow Owner Android App · Phases 1–4 (Foundation, Dashboard, Alerts &amp; Push, AI Advisor)<br>Originally prepared September 16, 2026 · Re-verified and updated September 18, 2026</div>
+
+<div class="disclosure">
+<strong>Update note (September 18, 2026):</strong> after this audit was originally written, the backend went through a separate architecture-hardening program (its own Phase 0.1–0.8) that touched most of the rest of the application. As part of that program, the Owner Android app's backend counterpart was found to have been quietly <strong>paused</strong> — its routes unmounted and its database migration never declared in the schema, so the app could not have reached the backend at all in that state. This has since been <strong>fully re-verified compatible and restored to a locally testable state</strong> (see the new Section C.1 and the refreshed evidence throughout this report). Per the client's explicit instruction, this restoration is deliberately <strong>not activated for real tenants or devices</strong> — it makes the app testable again, it does not put it live. Sections below are updated in place; nothing from the original findings was removed, only re-verified and, where the evidence changed, corrected.
+</div>
+
+<h2>A. Scope and Method</h2>
+<p>This audit covers Phases 1–4 of the AK VisionFlow Owner Android App as implemented against the four Phase specification documents, re-verified with fresh evidence on September 18, 2026. Evidence gathered:</p>
+<ul>
+<li>Fresh full backend Jest run (real, disposable local Postgres, never production), including — for the first time — the 5 Owner Mobile backend test files: <strong>415/415 tests passed, 18/18 suites, exit 0.</strong> (The original audit's 332/332 figure could not include the mobile suite at all, because the backend could not run it in the paused state described above.)</li>
+<li>Fresh full Android <code>assembleDebug</code> + <code>testDebugUnitTest</code> + <code>lintDebug</code>, forced clean (not a cached result): <strong>BUILD SUCCESSFUL — 58/58 unit tests passed, 0 lint issues, a real installable APK produced.</strong> This is the first time this exact build has been executed in this project's environment; the original September 16 audit was written before this evidence existed.</li>
+<li>Direct code inspection of every mobile backend route, the JWT/auth isolation layer, the database migration, and Android security-relevant files (token storage, network config, manifest, build config) — re-confirmed unchanged from the original audit.</li>
+<li>A read-only production database status check (no write/deploy/reset ever executed against production, then or now).</li>
+</ul>
+
+<h2>B. Git / Deployment State</h2>
+<p><strong>All Owner Android work remains local-only.</strong> Nothing has ever been pushed to the remote repository, either at the time of the original audit or now. Do not treat any part of this report as evidence of production deployment.</p>
+
+<h2>C. Production Database State</h2>
+<p>Verified via a read-only status check against the production database: the schema migration adding push notification and alert-preference tables has <strong>still not been applied to production</strong> — unchanged since the original audit. The mobile backend cannot function against production until this migration is deployed there — an action requiring the client's explicit authorization, not performed as part of this audit or its update.</p>
+
+<h3>C.1 What changed between the original audit and this update</h3>
+<p>Between September 16 and September 17, an unrelated backend architecture program found that the Owner Mobile backend routes had been unmounted and its database migration had never been declared in the ORM schema file — a state in which the app's backend could not have served a single request, even in a local test environment. On September 18, this was investigated and restored:</p>
+<ul>
+<li><strong>Schema/database drift closed:</strong> the migration's tables (device tokens, notification preferences, push configuration) had, it turned out, already been silently created in every local test database this whole time — but the ORM's schema file never declared them, so the backend code could not actually use them. The schema file has been corrected to match what the migration already creates. This is a declarative fix only; it changes nothing about what data exists, and was applied to local test databases only, never to production.</li>
+<li><strong>Routes re-connected locally:</strong> the six Owner Mobile API routes were re-connected in the local codebase (not deployed anywhere) so they could be tested again, together with a dedicated login rate-limiter matching the same protection the staff and customer-portal logins already have.</li>
+<li><strong>A genuine integration gap found and fixed:</strong> when the app was originally paused, the scheduled job that is supposed to dispatch push notifications and daily summaries had been disconnected from the rest of the automation pipeline and never reconnected. This was found via the restored test suite (5 tests failed until this was fixed) and has been repaired — this is a real bug fix, not a re-verification.</li>
+</ul>
+<p>None of this activates the app for any real business or device. It restores the app to the same "coded, tested, not yet deployed" state the original audit described — now with materially stronger evidence behind that claim than existed on September 16.</p>
+
+<h2>D. Cross-Phase Integration</h2>
+<p>Traced end-to-end: Auth → Home → Analytics → Alerts → AI Advisor → Profile → Logout, and the KPI → alert → AI → push → deep-link pipeline. No duplicated business logic (Alerts and AI Advisor read the same underlying data through two independent, non-mutating display mappings). No broken navigation, no stale-cache logic gaps, no API version mismatches found. Date/tenant/branch handling is consistent and correctly isolated per tenant's own timezone.</p>
+
+<h2>E. Phase 1 — Security Audit</h2>
+<table>
+<tr><th>Check</th><th>Result</th></tr>
+<tr><td>Non-GET requests blocked at the API level, not just the UI</td><td>Verified</td></tr>
+<tr><td>Staff / mobile / portal token mutual exclusivity</td><td>Verified — tested with a real cross-surface token rejection test</td></tr>
+<tr><td>Only the business owner role can obtain/use a mobile token</td><td>Verified — a staff (non-owner) login is rejected even with the correct password</td></tr>
+<tr><td>Deactivation takes effect immediately, not just at token expiry</td><td>Verified</td></tr>
+<tr><td>HTTPS enforced in production builds</td><td>Verified — cleartext HTTP is permitted only in local development builds, never in release builds</td></tr>
+<tr><td>Session token stored securely on-device</td><td>Verified (code-level) — Android Keystore-backed encrypted storage, not plain preferences</td></tr>
+<tr><td>Versioned API surface</td><td>Verified — isolated from both the staff web API and the customer portal API</td></tr>
+</table>
+<p>No blocking issues.</p>
+
+<h2>F. Phase 2 — Data / Analytics Audit</h2>
+<p>The Android app performs no independent recalculation — every figure shown is rendered directly from the same, already-tested backend service the main web application uses. Filter/comparison logic and empty/error/loading states are present and correct. No blocking issues.</p>
+
+<h2>G. Phase 3 — Alerts / Push Audit</h2>
+<p>A real cross-tenant penetration test confirms a second business account receives "not found," never another business's alert data. Marking an alert read/dismissed was verified in a real test to leave the underlying business record (e.g. product stock) completely unchanged. Notification preferences, minimum-priority filtering, and device-token registration are all correctly scoped per tenant. No blocking issues.</p>
+
+<h2>H. Phase 4 — AI Advisor Audit</h2>
+<p>A real cross-tenant test confirms a second business account sees zero data derived from another tenant. Every figure shown by the AI Advisor traces directly to existing, already-tested analytics — nothing is invented or fabricated. The daily brief and trend-forecast caching is enforced at the database level, preventing any duplicate record even under a rapid double-tap of "refresh."</p>
+<h3>Assessment of the deterministic (non-LLM) AI approach</h3>
+<p>The system uses rules/statistics-based analysis rather than a generative AI chatbot. This is assessed as an <strong>acceptable approach for this version</strong> — the specification's completion criteria (daily brief, anomaly flags, trend direction, evidence-backed recommendations) are all satisfied without requiring a conversational AI, and the app is explicitly decision-support (data + suggested action), never an automated decision-maker. The two previously-disclosed depth limitations (brief detail level; expense-trend evidence on quiet periods) are both classified as <strong>acceptable, deliberate design choices</strong>, not defects requiring a fix.</p>
+
+<h2>I. AI Safety / Grounding, Data Integrity, and Multi-Tenant/RBAC Review</h2>
+<p>No fabricated data anywhere in the evidence path. No cross-tenant or cross-branch leakage. No AI-triggered business-data mutation exists (every AI route is read-only). The database migration adding new tables/columns for this feature set is purely additive — no destructive statements. A code-and-real-test-level penetration review (cross-tenant object access, foreign branch IDs, unauthorized roles, tampered/expired tokens, malformed requests, direct object ID guessing) found every boundary correctly enforced. <strong>PASS</strong> on all four areas.</p>
+
+<h2>J. Existing Web System Regression</h2>
+<p>The full pre-existing backend test suite — covering products, customers, suppliers, categories, branches, sales (including reversal), purchases and receiving, payments, optical orders, stock/inventory, expenses, the existing AI Recommendation Center, and (as of the unrelated architecture program between the original audit and this update) multi-company/branch/warehouse management and a centralized permissions system — passed alongside all mobile-specific tests, with <strong>zero regressions</strong> introduced by this work or by restoring Owner Mobile compatibility.</p>
+
+<h2>K. Android Build/Quality Audit</h2>
+<p>Build, unit tests, and lint all pass cleanly — re-confirmed September 18 with a forced-clean rebuild (not a cached result) in an environment that, unlike September 16, has a working Android SDK installed: <strong>58 of 58 unit tests passed, lint reported "No issues found," and a real installable debug APK was produced.</strong> No hardcoded secrets or API keys were found anywhere in the app. Network request logging is limited to method/URL/status only — the session token is never written to any log, and all logging is disabled entirely in release builds. App permissions are minimal (internet access only). Session token storage uses hardware-backed encryption.</p>
+
+<h2>L. Production Readiness</h2>
+<table>
+<tr><th>Item</th><th>Status</th></tr>
+<tr><td>Backend logic, tenant isolation, RBAC, AI safety</td><td>Verified locally (real automated tests, re-confirmed September 18 at 415/415)</td></tr>
+<tr><td>Android build / unit tests / lint</td><td>Verified locally (real, forced-clean build run, re-confirmed September 18 at 58/58)</td></tr>
+<tr><td>Backend/database declarations match what the app needs</td><td>Corrected September 18 (was previously out of sync — see Section C.1); local test databases only</td></tr>
+<tr><td>Code pushed to the shared repository</td><td>Still not done</td></tr>
+<tr><td>Database schema present in production</td><td>Still not applied — requires client authorization</td></tr>
+<tr><td>Production API address configured in a release build</td><td>Still not configured — must be set at release-build time</td></tr>
+<tr><td>Real push notification credentials (vs. the local test provider)</td><td>Still not set up — requires a paid account action by the client</td></tr>
+<tr><td>On-device or emulator verification</td><td>Still not possible in any environment available to this project (see Addendum)</td></tr>
+</table>
+<p><em>Automated tests passing is not the same as being production-ready.</em> The same client-owned actions identified in the original audit still remain before this app can go live: publishing the code, applying the pending database update to production, and configuring the production server address and push credentials in a release build. This update makes the underlying evidence for "the code works" stronger and more current; it does not shorten this remaining list.</p>
+
+<h2>M. Backup / Recovery</h2>
+<p>The client's production database backup/point-in-time-recovery capability was <strong>not tested</strong> — doing so safely requires creating a disposable copy of the database via the hosting provider's own tools, which is a client action, not something performed automatically during this audit (to avoid any risk to live data).</p>
+
+<h2>N. Verdict</h2>
+<div class="verdict-box">
+🟡 <strong>GO WITH CONDITIONS</strong> — unchanged from the original September 16 verdict, now backed by fresher and more complete evidence (415/415 backend tests including the mobile suite itself, and a real forced-clean Android build). The application code, security architecture, tenant isolation, and automated test coverage for Phases 1–4 are sound and verified. The remaining conditions are the same deployment/infrastructure actions as before (publishing the code, applying the production database update, configuring production settings, real push credentials) — not code defects — plus on-device verification, which two separate attempts across two machines have still not been able to complete for environmental reasons outside this audit's control.
+</div>
+
+<div class="addendum">
+<h2 style="margin-top:0; border:none;">Addendum — Manual On-Device Testing Attempt</h2>
+<p>Following the original audit, a genuine attempt was made to perform manual, on-device testing of the Android app (login, navigation, and all Phase 1–4 screens) rather than relying on build success alone, as good practice requires.</p>
+<p><strong>What was done (September 16):</strong> An Android emulator and system image were installed, a local test backend and database were set up with real sample data, and a virtual test device was created.</p>
+<p><strong>What blocked completion (September 16):</strong> The emulator could not start because hardware virtualization (AMD-V / SVM) appeared disabled at the BIOS/firmware level on the machine used for that attempt — a setting that can only be changed by physically entering the machine's BIOS setup, outside the scope of a software audit.</p>
+<p><strong>A second attempt was made September 18</strong> (on the environment used for that day's re-verification, which by then had a working Android SDK, unlike September 16). The existing virtual test device started but failed at a later stage, reporting: <em>"x86_64 emulation currently requires hardware acceleration — Android Emulator hypervisor driver is not installed on this machine."</em> This is a related but distinct failure point from the September 16 attempt (a missing hypervisor driver rather than a BIOS setting), consistent with virtualization support being unavailable in some form on both machines tried so far.</p>
+<p><strong>Current status: on-device/manual testing remains NOT VERIFIED</strong>, across two separate attempts on two different points of failure. This is disclosed honestly rather than assumed or substituted with build/test-suite success. Once hardware virtualization is enabled and the emulator's hypervisor driver is installed (or a physical Android device is made available), the full manual smoke test (login/logout, Home, Analytics, Alerts, AI Advisor screens, navigation, loading/empty/error states) can be completed and this report updated accordingly.</p>
+</div>
+
+<div class="footer">AK VisionFlow — Owner Android App V1 Final Project Audit · Originally generated September 16, 2026 · Updated September 18, 2026</div>
+
+</body>
+</html>

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Debug-only override: allows cleartext HTTP so the app can talk to a local
+  backend (e.g. http://10.0.2.2:4000 from the emulator) during development.
+  Release builds never merge this file, so production installs always
+  require HTTPS via the base manifest's usesCleartextTraffic="false".
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <application
+        android:usesCleartextTraffic="true"
+        android:networkSecurityConfig="@xml/network_security_config_debug"
+        tools:replace="android:usesCleartextTraffic" />
+</manifest>

@@ -1,0 +1,109 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend:
+    name: Backend (tests + migration check)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: akvisionflow_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    defaults:
+      run:
+        working-directory: backend
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/akvisionflow_ci?schema=public
+      DIRECT_URL: postgresql://postgres:postgres@localhost:5432/akvisionflow_ci?schema=public
+      JWT_SECRET: ci-test-secret-not-for-production
+      NODE_ENV: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      # Real production concern: prove every committed migration actually
+      # applies cleanly to a fresh database. Runs before the tests below,
+      # since the routing/RBAC/business-logic test suite also needs the
+      # schema in place on this same fresh CI database (the fresh-database
+      # guarantee holds either way - the services.postgres container is
+      # newly created for every run).
+      - name: Apply migrations to a fresh database
+        run: npx prisma migrate deploy
+
+      # The permission catalog is reference data; without it every route is 403.
+      # Idempotent, and the same seed the production deploy runs (npm run db:setup).
+      - name: Seed permission catalog
+        run: node prisma/seedPermissions.js
+
+      - name: Check schema.prisma matches the migrations (no drift)
+        run: npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --exit-code
+
+      - name: Run unit/API/business-logic tests
+        run: npm test
+
+      - name: Audit dependencies (informational)
+        run: npm audit --audit-level=high
+        continue-on-error: true
+
+  frontend:
+    name: Frontend (lint + tests + build)
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Run tests (offline sync engine + components)
+        run: npm test
+
+      - name: Build production bundle
+        run: npm run build
+
+      - name: Audit dependencies (informational)
+        run: npm audit --audit-level=high
+        continue-on-error: true

@@ -1,0 +1,3444 @@
+// AK VisionFlow - Phase 1 Data Model
+// Multi-tenant optical/eyecare retail ERP.
+// Every tenant-owned table carries tenantId and is always queried scoped to it.
+
+generator client {
+  provider      = "prisma-client-js"
+  // "native" covers local dev on Windows/Mac/Linux; the musl-openssl-3.0.x
+  // target is required for the Alpine-based Docker image (backend/Dockerfile),
+  // which ships OpenSSL 3, not the 1.1 that Prisma's default musl engine expects.
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Platform / Tenancy
+// ---------------------------------------------------------------------------
+
+enum SubscriptionStatus {
+  TRIAL
+  ACTIVE
+  SUSPENDED
+  CANCELLED
+}
+
+model Tenant {
+  id                   String   @id @default(uuid())
+  name                 String
+  businessName         String
+  email                String?
+  phone                String?
+  address              String?
+  logoUrl              String?
+  timezone             String   @default("UTC")
+  currency             String   @default("USD")
+  // Phase 5: optional Pakistan tax-registration identifiers - foundation for
+  // future FBR/e-invoicing integration, never required or validated yet.
+  ntn                  String?
+  strn                 String?
+  // Phase 0.2: which industry packs this tenant has enabled, driving whether
+  // industry-specific Product fields (Optical/Medicine) are shown in the UI.
+  // Defaulted to both for every existing tenant so current behavior is
+  // unchanged; a future onboarding/settings flow can let a tenant customize
+  // this. Deliberately a plain string list, not a join table, per the Phase
+  // 0.2 ADR-4 scope boundary (architectural refactoring only, not a full
+  // industry-pack marketplace).
+  enabledIndustryPacks String[] @default(["OPTICAL", "MEDICINE"])
+  isActive             Boolean  @default(true)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  subscription              Subscription?
+  sequenceCounters          SequenceCounter[]
+  companies                 Company[]
+  userCompanyAccess         UserCompanyAccess[]
+  userWarehouseAccess       UserWarehouseAccess[]
+  branches                  Branch[]
+  users                     User[]
+  settings                  Setting[]
+  categories                Category[]
+  brands                    Brand[]
+  unitsOfMeasure            UnitOfMeasure[]
+  products                  Product[]
+  productOpticalAttributes  ProductOpticalAttributes[]
+  productMedicineAttributes ProductMedicineAttributes[]
+  productVariants           ProductVariant[]
+  customers                 Customer[]
+  suppliers                 Supplier[]
+  purchases                 Purchase[]
+  sales                     Sale[]
+  inventoryTxns             InventoryTransaction[]
+  opticalOrders             OpticalOrder[]
+  payments                  Payment[]
+  paymentAllocations        PaymentAllocation[]
+  noteApplications          NoteApplication[]
+  syncTerminals             SyncTerminal[]
+  syncIssues                SyncIssue[]
+  noteApplicationLines      NoteApplicationLine[]
+  expenses                  Expense[]
+  expenseCategories         ExpenseCategory[]
+  auditLogs                 AuditLog[]
+  accounts                  Account[]
+  salesReturns              SalesReturn[]
+  purchaseReturns           PurchaseReturn[]
+  creditNotes               CreditNote[]
+  debitNotes                DebitNote[]
+  quotations                Quotation[]
+  salesOrders               SalesOrder[]
+  journalEntries            JournalEntry[]
+  accountingPeriods         AccountingPeriod[]
+  taxRates                  TaxRate[]
+  purchaseRequests          PurchaseRequest[]
+  rfqs                      RFQ[]
+  supplierQuotations        SupplierQuotation[]
+  purchaseOrders            PurchaseOrder[]
+  goodsReceipts             GoodsReceipt[]
+  warehouses                Warehouse[]
+  stockTransfers            StockTransfer[]
+  patients                  Patient[]
+  doctors                   Doctor[]
+  appointments              Appointment[]
+  examinations              Examination[]
+  clinicalPrescriptions     ClinicalPrescription[]
+  labs                      Lab[]
+  communicationConfig       CommunicationConfig?
+  messageTemplates          MessageTemplate[]
+  messages                  Message[]
+  automationRules           AutomationRule[]
+  automationExecutions      AutomationExecution[]
+  notifications             Notification[]
+  customerPortalAccounts    CustomerPortalAccount[]
+  aiConfig                  AiConfig?
+  aiConversations           AiConversation[]
+  aiInsights                AiInsight[]
+  aiForecasts               AiForecast[]
+  aiUsageLogs               AiUsageLog[]
+  aiFeedback                AiFeedback[]
+  deviceTokens              DeviceToken[]
+  notificationPreferences   UserNotificationPreference[]
+  pushConfig                PushConfig?
+
+  @@map("tenants")
+}
+
+// Foundation only - full billing UI is Phase 3.
+model Subscription {
+  id               String             @id @default(uuid())
+  tenantId         String             @unique
+  tenant           Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  plan             String             @default("trial")
+  status           SubscriptionStatus @default(TRIAL)
+  trialEndsAt      DateTime?
+  currentPeriodEnd DateTime?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  @@map("subscriptions")
+}
+
+// Phase 0.3: sits between Tenant and Branch in the ownership hierarchy
+// (Tenant -> Company -> Branch -> Warehouse). Represents a distinct
+// business/legal operating entity a tenant runs - most tenants will have
+// exactly one (auto-created by the Phase 0.3 backfill for every existing
+// tenant), but a tenant that operates multiple legal entities can create
+// more. Company-level master data sharing beyond Branch ownership is
+// explicitly NOT implemented here (spec: "may be shared only when
+// explicitly configured" - no such configuration exists yet, so nothing is
+// shared today beyond the Branch relationship itself).
+model Company {
+  id        String   @id @default(uuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name      String
+  code      String?
+  // Phase 1.1: a Company is a distinct legal entity, so it carries its own
+  // identity/contact details - separate from both the Tenant's overall
+  // business profile and a Branch's operational address/phone - for use on
+  // company-specific documents (invoices, reports) once a tenant operates
+  // more than one. All optional so an existing single-company tenant is
+  // completely unaffected.
+  address   String?
+  phone     String?
+  email     String?
+  logoUrl   String?
+  ntn       String?
+  strn      String?
+  // Phase 1.1: explicit, administrator-visible/settable marker for "the"
+  // default company - previously only an implicit "first created" convention
+  // inside ensureDefaultCompany(). Enforced as at-most-one-per-tenant in
+  // application code (companies.routes.js), the same way Branch.isMain and
+  // Warehouse.isCentral are already enforced without a DB-level constraint.
+  isDefault Boolean  @default(false)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  branches   Branch[]
+  warehouses Warehouse[]
+  userAccess UserCompanyAccess[]
+
+  @@index([tenantId])
+  @@map("companies")
+}
+
+// Phase 0.3: grants a user "company-wide" access - visibility into every
+// branch under one Company - without needing an individual UserBranchAccess
+// grant per branch. This is the third access tier alongside "own branch"
+// (User.branchId) and "selected branch" (UserBranchAccess); TENANT_ADMIN/
+// MANAGER remain fully unrestricted regardless (unchanged from Phase 6).
+model UserCompanyAccess {
+  id        String   @id @default(uuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  companyId String
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, companyId])
+  @@index([tenantId])
+  @@map("user_company_access")
+}
+
+model Branch {
+  id        String   @id @default(uuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  // Phase 0.3: nullable at the schema level during the additive/transitional
+  // migration (see docs/phase0-3-migration-rollback-plan.md). Existing
+  // branches are backfilled to a default company by a one-time script;
+  // NEW branches get companyId either from an explicit, tenant-verified
+  // value, or transparently from a lazily-created default company
+  // (branches.routes.js's ensureDefaultCompany call) so a tenant that never
+  // thinks about "companies" sees no change in behavior. The column itself
+  // is not DB-level NOT NULL, consistent with this project's established
+  // additive-migration convention (Phase 0.2 Product followed the same
+  // pattern for productKind/brand).
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  name      String
+  // Phase 6: short branch code (e.g. "MAIN", "B02") - optional, tenant picks
+  // its own convention, never required so a single-branch shop is unaffected.
+  code      String?
+  address   String?
+  phone     String?
+  isMain    Boolean  @default(false)
+  isActive  Boolean  @default(true)
+  // Operational open/closed status - distinct from isActive (a deactivated
+  // branch is retired; a closed branch is just not trading right now, e.g.
+  // end-of-day, and can reopen without losing anything).
+  isOpen    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users            User[]
+  sales            Sale[]             @relation("SaleBranch")
+  purchases        Purchase[]         @relation("PurchaseBranch")
+  journalEntries   JournalEntry[]
+  purchaseRequests PurchaseRequest[]
+  purchaseOrders   PurchaseOrder[]
+  opticalOrders    OpticalOrder[]
+  warehouses       Warehouse[]
+  userAccess       UserBranchAccess[]
+  expenses         Expense[]
+  messages         Message[]
+  doctors          Doctor[]
+  appointments     Appointment[]
+  aiInsights       AiInsight[]
+  payments         Payment[]
+  salesReturns     SalesReturn[]
+  purchaseReturns  PurchaseReturn[]
+  creditNotes      CreditNote[]
+  debitNotes       DebitNote[]
+  quotations       Quotation[]
+  salesOrders      SalesOrder[]
+  auditLogs        AuditLog[]
+  notifications    Notification[]
+
+  @@index([tenantId])
+  @@map("branches")
+}
+
+model Setting {
+  id        String   @id @default(uuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  key       String
+  value     String
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, key])
+  @@map("settings")
+}
+
+// ---------------------------------------------------------------------------
+// Users, Roles, Auth
+// ---------------------------------------------------------------------------
+
+enum RoleName {
+  SUPER_ADMIN
+  TENANT_ADMIN
+  MANAGER
+  CASHIER
+  STORE_KEEPER
+  RECEPTIONIST
+  ACCOUNTANT
+  // Phase 7: clinical role - conducts examinations, issues prescriptions.
+  DOCTOR
+}
+
+// Phase 0.4: action vocabulary every Permission is expressed in terms of,
+// per the spec's required action set.
+enum PermissionAction {
+  VIEW
+  CREATE
+  UPDATE
+  DELETE
+  APPROVE
+  REVERSE
+  EXPORT
+  // Phase 1.13: releasing actual cash against a Credit/Debit Note - distinct
+  // from REVERSE (undoing the note's own financial effect without any cash
+  // changing hands), which CREDIT_NOTE/DEBIT_NOTE's own cancel action reuses.
+  REFUND
+}
+
+// Phase 0.4: the system-wide catalog of (resource, action) capabilities -
+// e.g. ("PRODUCT", "CREATE"). Global, not tenant-scoped: this describes what
+// actions EXIST in the application, not who has them (that's
+// RolePermission) or which specific record a user may act on (that's the
+// existing Tenant/Company/Branch/Warehouse scope layer - see
+// docs/phase0-4-authorization-architecture.md). Seeded once, at migration
+// time, to exactly mirror the role-group behavior this codebase already had
+// (backend/src/constants/roles.js) - a zero-behavior-change migration for
+// every role/route this phase does not explicitly rewire.
+model Permission {
+  id          String           @id @default(uuid())
+  resource    String
+  action      PermissionAction
+  key         String           @unique
+  description String?
+  createdAt   DateTime         @default(now())
+
+  rolePermissions RolePermission[]
+
+  @@unique([resource, action])
+  @@map("permissions")
+}
+
+// Phase 0.4: which RoleName has which Permission - the "Role definition"
+// layer, kept explicitly separate from "User assignment" (User.role, plus
+// the existing UserBranchAccess/UserCompanyAccess and new
+// UserWarehouseAccess below) and from "Permission definition" (Permission
+// itself), per the spec's explicit instruction to keep these three concerns
+// separate rather than hard-coding permission checks inside controllers.
+model RolePermission {
+  id           String     @id @default(uuid())
+  role         RoleName
+  permissionId String
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  createdAt    DateTime   @default(now())
+
+  @@unique([role, permissionId])
+  @@map("role_permissions")
+}
+
+// Phase 0.4: the third assignable scope tier, alongside the existing
+// UserBranchAccess (Phase 6) and UserCompanyAccess (Phase 0.3). Opt-in:
+// a user with NO rows here is scoped by branch/company access alone
+// (today's behavior, unchanged, for any tenant that never uses this) - a
+// user WITH rows here is restricted to exactly those warehouses, still
+// bounded by their branch/company access (a grant naming a warehouse whose
+// branch the user can no longer reach never grants access - "warehouse
+// access must respect Company and Branch authorization").
+model UserWarehouseAccess {
+  id          String    @id @default(uuid())
+  tenantId    String
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  warehouseId String
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now())
+
+  @@unique([userId, warehouseId])
+  @@index([tenantId])
+  @@map("user_warehouse_access")
+}
+
+model User {
+  id           String    @id @default(uuid())
+  tenantId     String? // null only for SUPER_ADMIN platform users
+  tenant       Tenant?   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branchId     String?
+  branch       Branch?   @relation(fields: [branchId], references: [id])
+  name         String
+  email        String
+  passwordHash String
+  role         RoleName  @default(CASHIER)
+  isActive     Boolean   @default(true)
+  lastLoginAt  DateTime?
+  // Tokens issued before this instant are refused (set on every password change/reset).
+  passwordChangedAt DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  passwordResetTokens       PasswordResetToken[]
+  auditLogs                 AuditLog[]
+  sales                     Sale[]                      @relation("SaleCashier")
+  purchases                 Purchase[]                  @relation("PurchaseCreatedBy")
+  postedJournalEntries      JournalEntry[]
+  requestedPurchaseRequests PurchaseRequest[]           @relation("PRRequestedBy")
+  approvedPurchaseRequests  PurchaseRequest[]           @relation("PRApprovedBy")
+  branchAccess              UserBranchAccess[]
+  companyAccess             UserCompanyAccess[]
+  warehouseAccess           UserWarehouseAccess[]
+  doctorProfile             Doctor?
+  triggeredMessages         Message[]
+  notifications             Notification[]
+  aiConversations           AiConversation[]
+  aiFeedback                AiFeedback[]
+  deviceTokens              DeviceToken[]
+  notificationPreference    UserNotificationPreference?
+  expensesCreated           Expense[]                   @relation("ExpenseCreatedBy")
+  expensesPayee             Expense[]                   @relation("ExpensePayee")
+  salesReturnsCreated       SalesReturn[]               @relation("SalesReturnCreatedBy")
+  purchaseReturnsCreated    PurchaseReturn[]            @relation("PurchaseReturnCreatedBy")
+  creditNotesCreated        CreditNote[]                @relation("CreditNoteCreatedBy")
+  debitNotesCreated         DebitNote[]                 @relation("DebitNoteCreatedBy")
+  quotationsAsSalesperson   Quotation[]                 @relation("QuotationSalesperson")
+  salesOrdersAsSalesperson  SalesOrder[]                @relation("SalesOrderSalesperson")
+
+  @@unique([tenantId, email])
+  @@index([tenantId])
+  @@map("users")
+}
+
+// Per-tenant, per-document-type counter behind every human-readable number (INV-000123, JE-..., RCT-...).
+// Allocated inside the document's own transaction with one atomic upsert, so concurrent creates can never
+// draw the same number and a rolled-back document gives its number back (see utils/sequenceNumber.js).
+model SequenceCounter {
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  key       String
+  value     Int
+  updatedAt DateTime @updatedAt
+
+  @@id([tenantId, key])
+  @@map("sequence_counters")
+}
+
+// One-time password-reset credential. Only the SHA-256 of the token is stored, so a database leak does not
+// yield usable reset links. Created by the self-service "forgot password" flow or by a tenant admin.
+model PasswordResetToken {
+  id          String    @id @default(uuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash   String    @unique
+  expiresAt   DateTime
+  usedAt      DateTime?
+  createdById String? // set when a tenant admin issued it
+  createdAt   DateTime  @default(now())
+
+  @@index([userId])
+  @@map("password_reset_tokens")
+}
+
+// ---------------------------------------------------------------------------
+// Products / Inventory
+// ---------------------------------------------------------------------------
+
+enum ProductType {
+  GENERAL
+  MEDICINE
+  FRAME
+  LENS
+}
+
+// Phase 0.2: universal, industry-neutral classification that actually drives
+// behavior (stock tracking on/off). Replaces ProductType's behavioral role;
+// ProductType itself is retained unmodified for backward compatibility with
+// existing Optical/Medical consumers until they are migrated (see
+// docs/phase0-2-architecture-package.md, ADR-2/ADR-3).
+enum ProductKind {
+  PHYSICAL_GOOD
+  SERVICE
+}
+
+// Phase 0.2: Optical-pack-owned sub-classification, replacing the FRAME/LENS
+// meaning previously baked into the universal ProductType enum.
+enum OpticalAttributeKind {
+  FRAME
+  LENS
+  CONTACT_LENS
+  ACCESSORY
+}
+
+model Category {
+  id        String     @id @default(uuid())
+  tenantId  String
+  tenant    Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name      String
+  // Phase 1.5: optional self-relation for subcategory support - additive,
+  // so a tenant that never uses subcategories sees no change (every
+  // existing Category simply has parentId: null, exactly like today).
+  // Restrict (not Cascade) on delete: a parent with children cannot be
+  // hard-deleted out from under them - matches this project's soft-delete
+  // (isActive) convention for removing a category anyway.
+  parentId  String?
+  parent    Category?  @relation("CategoryHierarchy", fields: [parentId], references: [id], onDelete: Restrict)
+  children  Category[] @relation("CategoryHierarchy")
+  isActive  Boolean    @default(true)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  products Product[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+  @@index([tenantId, parentId])
+  @@map("categories")
+}
+
+// Phase 1.5: universal, industry-neutral Brand catalog - generalizes the
+// free-text Product.brand field (Phase 0.2 ADR-5) into a manageable,
+// reusable entity, the same way Category already works. Product.brand
+// itself is untouched for full backward compatibility; brandId is an
+// additional, optional, structured reference a tenant can use once it wants
+// a consistent brand list instead of free-typing every time.
+model Brand {
+  id        String   @id @default(uuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name      String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  products Product[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+  @@map("brands")
+}
+
+// Phase 1.5: universal, industry-neutral Unit of Measure catalog -
+// generalizes the free-text Product.unit field (defaulted to "pcs" since
+// Phase 0.2) into a manageable, reusable entity. Product.unit itself is
+// untouched for full backward compatibility; unitId is an additional,
+// optional, structured reference.
+//
+// baseUnitId/conversionFactor are an optional, minimal conversion
+// relationship (e.g. "Box" -> baseUnit "Pcs", factor 12, meaning 1 Box = 12
+// Pcs) - pure reference data only. No inventory calculation anywhere reads
+// this yet; wiring actual stock/unit conversion into a transaction is
+// explicitly Phase 1.10's Inventory Engine, not this phase's scope.
+model UnitOfMeasure {
+  id               String          @id @default(uuid())
+  tenantId         String
+  tenant           Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name             String
+  code             String?
+  baseUnitId       String?
+  baseUnit         UnitOfMeasure?  @relation("UnitConversion", fields: [baseUnitId], references: [id], onDelete: SetNull)
+  derivedUnits     UnitOfMeasure[] @relation("UnitConversion")
+  conversionFactor Decimal?        @db.Decimal(12, 4)
+  isActive         Boolean         @default(true)
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  products Product[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+  @@map("units_of_measure")
+}
+
+model Product {
+  id                String         @id @default(uuid())
+  tenantId          String
+  tenant            Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  categoryId        String?
+  category          Category?      @relation(fields: [categoryId], references: [id])
+  type              ProductType    @default(GENERAL)
+  // Phase 0.2: universal classification (see ProductKind doc comment above).
+  // Defaulted to PHYSICAL_GOOD and backfilled for all existing rows, since no
+  // current product is a service. New code should read/write this field;
+  // `type` is retained only for backward compatibility with existing
+  // consumers (see docs/phase0-2-entity-map-and-field-mapping.md).
+  productKind       ProductKind    @default(PHYSICAL_GOOD)
+  // Phase 0.2: universal brand field (ADR-5) - generalizes the previously
+  // Optical-only `frameBrand` into a Universal Core concept every vertical
+  // can use. `frameBrand` is retained below for backward compatibility.
+  brand             String?
+  // Phase 1.5: optional structured reference to the new Brand catalog,
+  // additive alongside the free-text `brand` string above - a product that
+  // never uses the catalog keeps working exactly as before (brandId: null).
+  brandId           String?
+  brandRef          Brand?         @relation(fields: [brandId], references: [id], onDelete: SetNull)
+  name              String
+  sku               String?
+  barcode           String?
+  description       String?
+  purchasePrice     Decimal        @default(0) @db.Decimal(12, 2)
+  sellingPrice      Decimal        @default(0) @db.Decimal(12, 2)
+  stockQuantity     Decimal        @default(0) @db.Decimal(12, 2)
+  lowStockThreshold Decimal        @default(0) @db.Decimal(12, 2)
+  unit              String         @default("pcs")
+  // Phase 1.5: optional structured reference to the new UnitOfMeasure
+  // catalog, additive alongside the free-text `unit` string above.
+  unitId            String?
+  unitRef           UnitOfMeasure? @relation(fields: [unitId], references: [id], onDelete: SetNull)
+
+  // Frame-specific
+  frameBrand String?
+  frameModel String?
+  frameColor String?
+  frameSize  String?
+
+  // Lens-specific
+  lensType     String?
+  lensMaterial String?
+  lensCoating  String?
+
+  // Medicine-specific
+  batchNumber String?
+  expiryDate  DateTime?
+
+  isActive   Boolean   @default(true)
+  archivedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  purchaseItems          PurchaseItem[]
+  saleItems              SaleItem[]
+  inventoryTxns          InventoryTransaction[]
+  purchaseRequestItems   PurchaseRequestItem[]
+  rfqItems               RFQItem[]
+  quotationItems         SupplierQuotationItem[]
+  purchaseOrderItems     PurchaseOrderItem[]
+  opticalOrderItems      OpticalOrderItem[]
+  goodsReceiptItems      GoodsReceiptItem[]
+  warehouseStocks        WarehouseStock[]
+  stockTransferItems     StockTransferItem[]
+  salesReturnItems       SalesReturnItem[]
+  purchaseReturnItems    PurchaseReturnItem[]
+  // Phase 1.14: named distinctly from the existing quotationItems above
+  // (SupplierQuotationItem, the Phase 5 procurement/RFQ-response concept) -
+  // this is the new customer-facing Quotation's own line items.
+  customerQuotationItems QuotationItem[]
+  salesOrderItems        SalesOrderItem[]
+
+  // Phase 0.2: industry extensions (0..1 each) and optional variants.
+  opticalAttributes  ProductOpticalAttributes?
+  medicineAttributes ProductMedicineAttributes?
+  variants           ProductVariant[]
+
+  @@unique([tenantId, sku])
+  @@index([tenantId])
+  @@index([tenantId, barcode])
+  @@index([tenantId, type])
+  @@map("products")
+}
+
+// Phase 0.2 Industry Extension (Optical pack). 1:1 with Product. Carries its
+// own tenantId directly (not just via productId) as defense-in-depth, per
+// the Phase 0.1 audit finding that child tables relying purely on parent-join
+// scoping have zero schema-level guardrail against a future query forgetting
+// to join through the parent.
+model ProductOpticalAttributes {
+  id          String               @id @default(uuid())
+  tenantId    String
+  tenant      Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  productId   String               @unique
+  product     Product              @relation(fields: [productId], references: [id], onDelete: Cascade)
+  opticalKind OpticalAttributeKind
+
+  frameBrand String?
+  frameModel String?
+  frameColor String?
+  frameSize  String?
+
+  lensType     String?
+  lensMaterial String?
+  lensCoating  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+  @@map("product_optical_attributes")
+}
+
+// Phase 0.2 Industry Extension (Medicine/Pharmacy pack). 1:1 with Product.
+model ProductMedicineAttributes {
+  id        String  @id @default(uuid())
+  tenantId  String
+  tenant    Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  productId String  @unique
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  batchNumber String?
+  expiryDate  DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+  @@index([tenantId, expiryDate])
+  @@map("product_medicine_attributes")
+}
+
+// Phase 0.2 Variant (Universal, optional). No legacy data is migrated into
+// this table in Phase 0.2 - see docs/phase0-2-architecture-package.md ADR-6.
+model ProductVariant {
+  id            String   @id @default(uuid())
+  tenantId      String
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  productId     String
+  product       Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  name          String
+  sku           String?
+  barcode       String?
+  priceOverride Decimal? @db.Decimal(12, 2)
+  stockQuantity Decimal? @db.Decimal(12, 2)
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  saleItems       SaleItem[]
+  purchaseItems   PurchaseItem[]
+  quotationItems  QuotationItem[]
+  salesOrderItems SalesOrderItem[]
+
+  @@index([tenantId])
+  @@index([tenantId, productId])
+  @@map("product_variants")
+}
+
+enum InventoryTxnType {
+  OPENING_STOCK
+  PURCHASE_RECEIVE
+  SALE_DEDUCTION
+  SALE_REVERSAL
+  ADJUSTMENT_IN
+  ADJUSTMENT_OUT
+  // Phase 5: goods physically returned to a supplier - distinct from a
+  // manual ADJUSTMENT_OUT so stock history clearly shows why it happened.
+  // Phase 1.13: also reused for the new PurchaseReturn model's own goods-
+  // out movements - the same real-world event, distinguished by `reference`
+  // (this PurchaseReturn's own id) rather than a second, redundant type.
+  PURCHASE_RETURN
+  // Phase 1.13: goods physically returned BY a customer - distinct from
+  // SALE_REVERSAL (Sale's own whole-sale reversal, unchanged) so stock
+  // history clearly shows a partial customer return, not a full undo.
+  SALES_RETURN
+  // Phase 6: inter-warehouse stock transfers - distinct from ADJUSTMENT_*
+  // so the movement ledger clearly shows a transfer, not a manual correction.
+  TRANSFER_DISPATCH
+  TRANSFER_RECEIVE
+}
+
+model InventoryTransaction {
+  id             String           @id @default(uuid())
+  tenantId       String
+  tenant         Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  productId      String
+  product        Product          @relation(fields: [productId], references: [id])
+  // Phase 6: which warehouse this movement affects - nullable so every
+  // pre-Phase-6 row (and any tenant that never sets up a warehouse) is
+  // unaffected. Populated for transfer dispatch/receive and warehouse-scoped
+  // receive/adjust operations.
+  warehouseId    String?
+  warehouse      Warehouse?       @relation(fields: [warehouseId], references: [id])
+  type           InventoryTxnType
+  quantity       Decimal          @db.Decimal(12, 2) // positive = in, negative = out
+  balanceAfter   Decimal          @db.Decimal(12, 2)
+  reference      String? // e.g. sale/purchase id
+  note           String?
+  createdById    String?
+  createdAt      DateTime         @default(now())
+  // Phase 1.10: client-generated key so a retried direct stock movement
+  // (warehouse receive/dispatch/adjust, product adjust-stock - flaky
+  // connection, offline outbox retry) is recognized as the same operation
+  // instead of creating a duplicate movement/double-mutating stock. Optional
+  // and nullable so every pre-Phase-1.10 row, and any caller that doesn't
+  // supply one, is unaffected - mirrors the identical pattern already used by
+  // Purchase/Sale/StockTransfer/GoodsReceipt.
+  idempotencyKey String?
+
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId, productId])
+  @@index([tenantId, warehouseId])
+  @@map("inventory_transactions")
+}
+
+// ---------------------------------------------------------------------------
+// Customers / Suppliers
+// ---------------------------------------------------------------------------
+
+model Customer {
+  id             String   @id @default(uuid())
+  tenantId       String
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name           String
+  phone          String?
+  email          String?
+  address        String?
+  // Phase 1.6: optional, tenant-chosen human-readable identifier (e.g.
+  // "CUST-0001") - purely additive, mirroring Branch.code/Warehouse.code.
+  // A tenant that never sets one is completely unaffected. Uniqueness is
+  // enforced at the database level; multiple customers with no code (null)
+  // is standard SQL NULL semantics, not a conflict.
+  code           String?
+  // Phase 1.6: a single free-text internal note field, mirroring the same
+  // lightweight `note` pattern already used on transaction records
+  // elsewhere in this schema (e.g. InventoryTransaction.note) - deliberately
+  // NOT a full notes/activity-log or CRM system, which is out of this
+  // phase's scope.
+  notes          String?
+  isActive       Boolean  @default(true)
+  // Client-generated key for offline-created records - lets a retried sync
+  // (after a dropped connection) be recognized as the same create instead of
+  // producing a duplicate. Null for records created while online.
+  idempotencyKey String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  sales                   Sale[]
+  opticalOrders           OpticalOrder[]
+  payments                Payment[]
+  journalLines            JournalLine[]
+  // Phase 7: a Customer becomes clinically active by gaining a Patient
+  // profile - the identity (name/phone/email) is never duplicated, only
+  // extended. Not every Customer has one.
+  patient                 Patient?
+  messages                Message[]
+  communicationPreference CustomerCommunicationPreference?
+  portalAccount           CustomerPortalAccount?
+  salesReturns            SalesReturn[]
+  creditNotes             CreditNote[]
+  quotations              Quotation[]
+  salesOrders             SalesOrder[]
+
+  @@unique([tenantId, idempotencyKey])
+  @@unique([tenantId, code])
+  @@index([tenantId])
+  // Phase 1.16: phone/email had no index at all before this phase - added
+  // specifically because Universal Search now queries both routinely.
+  // Plain btree, not a trigram/GIN index (see this phase's report, Database/
+  // Performance) - helps exact-match/prefix lookups, not a leading-wildcard
+  // `contains` scan, but is a real, safe, zero-drift-risk improvement over
+  // no index at all, without introducing a Postgres extension.
+  @@index([tenantId, phone])
+  @@index([tenantId, email])
+  @@map("customers")
+}
+
+model Supplier {
+  id             String   @id @default(uuid())
+  tenantId       String
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name           String
+  phone          String?
+  email          String?
+  address        String?
+  // Phase 1.7: optional, tenant-chosen human-readable identifier, mirroring
+  // Customer.code (Phase 1.6) exactly - purely additive, a tenant that never
+  // sets one is completely unaffected. Uniqueness enforced at the database
+  // level; multiple suppliers with no code (null) is standard SQL NULL
+  // semantics, not a conflict.
+  code           String?
+  // Phase 1.7: a single free-text internal note field, mirroring
+  // Customer.notes (Phase 1.6) and the same lightweight `note` pattern used
+  // on transaction records elsewhere - not a full notes/CRM system.
+  notes          String?
+  isActive       Boolean  @default(true)
+  idempotencyKey String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  purchases       Purchase[]
+  payments        Payment[]
+  journalLines    JournalLine[]
+  rfqInvites      RFQSupplier[]
+  quotations      SupplierQuotation[]
+  purchaseOrders  PurchaseOrder[]
+  expenses        Expense[]
+  purchaseReturns PurchaseReturn[]
+  debitNotes      DebitNote[]
+
+  @@unique([tenantId, idempotencyKey])
+  @@unique([tenantId, code])
+  @@index([tenantId])
+  // Phase 1.16: mirrors Customer's identical new phone/email index addition.
+  @@index([tenantId, phone])
+  @@index([tenantId, email])
+  @@map("suppliers")
+}
+
+// ---------------------------------------------------------------------------
+// Purchases
+// ---------------------------------------------------------------------------
+
+enum PurchaseStatus {
+  DRAFT
+  RECEIVED
+  CANCELLED
+  // Added in Phase 5 for the purchase-return workflow - a whole received
+  // purchase can be returned to the supplier, reversing its stock and
+  // accounting effects (see purchases.routes.js POST /:id/return).
+  RETURNED
+}
+
+enum PaymentStatus {
+  UNPAID
+  PARTIAL
+  PAID
+}
+
+model Purchase {
+  id              String         @id @default(uuid())
+  tenantId        String
+  tenant          Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  supplierId      String
+  supplier        Supplier       @relation(fields: [supplierId], references: [id])
+  // Nullable/backfilled NULL for pre-Phase-4 rows, same rationale as Sale.branchId.
+  branchId        String?
+  branch          Branch?        @relation("PurchaseBranch", fields: [branchId], references: [id])
+  // Phase 1.9: optional warehouse attribution, mirroring Sale.warehouseId's
+  // identical Phase 1.8 pattern exactly - validated via the existing
+  // assertWarehouseAccess on create, does not yet drive per-warehouse
+  // WarehouseStock adjustment (Product.stockQuantity remains the sole
+  // target, unchanged). See this phase's report, Known Limitations.
+  warehouseId     String?
+  warehouse       Warehouse?     @relation(fields: [warehouseId], references: [id])
+  purchaseNumber  String
+  status          PurchaseStatus @default(DRAFT)
+  paymentStatus   PaymentStatus  @default(UNPAID)
+  subtotal        Decimal        @default(0) @db.Decimal(12, 2)
+  discount        Decimal        @default(0) @db.Decimal(12, 2)
+  // Phase 5: optional tax amount, symmetrical with Sale.tax. Nullable-safe
+  // default of 0 so every pre-Phase-5 row is unaffected.
+  tax             Decimal        @default(0) @db.Decimal(12, 2)
+  total           Decimal        @default(0) @db.Decimal(12, 2)
+  amountPaid      Decimal        @default(0) @db.Decimal(12, 2)
+  // Phase 1.9: a single free-text note field, mirroring Sale.notes/
+  // Customer.notes/Supplier.notes' identical lightweight pattern.
+  notes           String?
+  receivedAt      DateTime?
+  createdById     String?
+  createdBy       User?          @relation("PurchaseCreatedBy", fields: [createdById], references: [id])
+  idempotencyKey  String?
+  // Phase 5: set when this Purchase (an accepted-goods "supplier invoice")
+  // was generated automatically from a Goods Receipt against a Purchase
+  // Order, rather than entered directly - see goodsReceipts.routes.js.
+  purchaseOrderId String?
+  purchaseOrder   PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id])
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  items                PurchaseItem[]
+  payments             Payment[]
+  paymentAllocations   PaymentAllocation[]
+  noteApplicationLines NoteApplicationLine[]
+  goodsReceipt         GoodsReceipt?
+  purchaseReturns      PurchaseReturn[]
+
+  @@unique([tenantId, purchaseNumber])
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId])
+  @@index([tenantId, branchId])
+  @@index([tenantId, purchaseOrderId])
+  @@map("purchases")
+}
+
+model PurchaseItem {
+  id               String          @id @default(uuid())
+  purchaseId       String
+  purchase         Purchase        @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  productId        String
+  product          Product         @relation(fields: [productId], references: [id])
+  // Phase 1.9: optional attribution to a specific Product Variant (Phase
+  // 1.4), mirroring SaleItem.variantId's identical Phase 1.8 pattern - does
+  // not affect stock, which stays at the Product level.
+  variantId        String?
+  variant          ProductVariant? @relation(fields: [variantId], references: [id])
+  quantity         Decimal         @db.Decimal(12, 2)
+  unitCost         Decimal         @db.Decimal(12, 2)
+  lineTotal        Decimal         @db.Decimal(12, 2)
+  // Phase 1.13: running total of how much of this line has already been
+  // returned to the supplier across one or more PurchaseReturns - the
+  // atomic guard against over-returning under concurrency (mirrors
+  // PurchaseOrderItem.receivedQuantity's identical Phase 1.9 pattern
+  // exactly). Defaults to 0 so every pre-Phase-1.13 row is unaffected.
+  returnedQuantity Decimal         @default(0) @db.Decimal(12, 2)
+
+  purchaseReturnItems PurchaseReturnItem[]
+
+  @@index([purchaseId])
+  @@map("purchase_items")
+}
+
+// ---------------------------------------------------------------------------
+// Sales / POS
+// ---------------------------------------------------------------------------
+
+enum SaleStatus {
+  COMPLETED
+  REVERSED
+}
+
+model Sale {
+  id             String        @id @default(uuid())
+  tenantId       String
+  tenant         Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customerId     String?
+  customer       Customer?     @relation(fields: [customerId], references: [id])
+  // Nullable and backfilled as NULL for pre-Phase-4 rows ("Unassigned") -
+  // added so branch-level filtering/reporting is possible without inventing
+  // branch data for historical sales that were never tied to one.
+  branchId       String?
+  branch         Branch?       @relation("SaleBranch", fields: [branchId], references: [id])
+  // Phase 1.8: optional warehouse attribution, mirroring branchId's own
+  // optional/backfilled-null pattern - additive, so every existing sale
+  // (and every caller that never sends one) is completely unaffected.
+  // Validated via the existing assertWarehouseAccess (Phase 0.4) on create,
+  // same as branchId's assertBranchAccess - this records and authorizes
+  // WHICH warehouse a sale was fulfilled from; it does not yet drive
+  // per-warehouse stock deduction (Product.stockQuantity remains the sole
+  // deduction target, exactly as before this phase) - see the Phase 1.8
+  // report's Known Limitations for why that reconciliation is Phase 1.10's
+  // Inventory Engine scope, not Sales Management's.
+  warehouseId    String?
+  warehouse      Warehouse?    @relation(fields: [warehouseId], references: [id])
+  invoiceNumber  String
+  status         SaleStatus    @default(COMPLETED)
+  paymentStatus  PaymentStatus @default(PAID)
+  subtotal       Decimal       @default(0) @db.Decimal(12, 2)
+  discount       Decimal       @default(0) @db.Decimal(12, 2)
+  tax            Decimal       @default(0) @db.Decimal(12, 2)
+  total          Decimal       @default(0) @db.Decimal(12, 2)
+  amountPaid     Decimal       @default(0) @db.Decimal(12, 2)
+  paymentMethod  String        @default("cash")
+  // Phase 1.8: a single free-text note field, mirroring the same lightweight
+  // pattern already used for Customer.notes/Supplier.notes (Phase 1.6/1.7).
+  notes          String?
+  cashierId      String?
+  cashier        User?         @relation("SaleCashier", fields: [cashierId], references: [id])
+  // Phase 5.2: optional link to the clinical visit this sale bills (e.g. a
+  // consultation fee, sold as an ordinary SERVICE-kind product so it never
+  // touches stock) - additive, so every existing/non-clinical Sale is
+  // completely unaffected. The Sale engine itself is reused unchanged; this
+  // is traceability only, not a second billing system.
+  appointmentId  String?
+  appointment    Appointment?  @relation(fields: [appointmentId], references: [id])
+  idempotencyKey String? // client-generated, for future sync/idempotency
+  // Phase 1.14: set when this Sale was generated by converting/fulfilling a
+  // Sales Order (in full or in part - see salesOrders.routes.js POST
+  // /:id/convert), rather than entered directly at the POS. Mirrors
+  // Purchase.purchaseOrderId's identical Phase 1.9 pattern exactly. A Sale
+  // created this way is otherwise a completely ordinary Sale row - every
+  // existing Sale feature (return, reverse, pay, reports) works on it
+  // unchanged.
+  salesOrderId   String?
+  salesOrder     SalesOrder?   @relation(fields: [salesOrderId], references: [id])
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  items                SaleItem[]
+  payments             Payment[]
+  paymentAllocations   PaymentAllocation[]
+  noteApplicationLines NoteApplicationLine[]
+  salesReturns         SalesReturn[]
+
+  @@unique([tenantId, invoiceNumber])
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId])
+  @@index([tenantId, branchId])
+  @@map("sales")
+}
+
+model SaleItem {
+  id               String          @id @default(uuid())
+  saleId           String
+  sale             Sale            @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  productId        String
+  product          Product         @relation(fields: [productId], references: [id])
+  // Phase 1.8: optional attribution to a specific Product Variant (Phase
+  // 1.4) - additive, records WHICH variant was sold for tenants that use
+  // variants. Stock/inventory tracking remains at the Product level, exactly
+  // as before this phase; ProductVariant.stockQuantity is not touched here
+  // (per the existing Phase 1.4 design, variant stock is not yet wired into
+  // any transactional flow - see this report's Known Limitations).
+  variantId        String?
+  variant          ProductVariant? @relation(fields: [variantId], references: [id])
+  quantity         Decimal         @db.Decimal(12, 2)
+  unitPrice        Decimal         @db.Decimal(12, 2)
+  discount         Decimal         @default(0) @db.Decimal(12, 2)
+  lineTotal        Decimal         @db.Decimal(12, 2)
+  // Phase 1.13: running total of how much of this line has already been
+  // returned by the customer across one or more SalesReturns - the atomic
+  // guard against over-returning under concurrency (mirrors
+  // PurchaseOrderItem.receivedQuantity's identical Phase 1.9 pattern
+  // exactly). Defaults to 0 so every pre-Phase-1.13 row is unaffected.
+  returnedQuantity Decimal         @default(0) @db.Decimal(12, 2)
+  // Phase 1.14: which Sales Order line this Sale line fulfilled, when this
+  // Sale was created via SalesOrder conversion rather than entered directly.
+  // Mirrors GoodsReceiptItem.purchaseOrderItemId's identical traceability
+  // role, applied directly on SaleItem rather than via a separate
+  // fulfillment-record model, since a Sale (unlike a GRN) already IS the
+  // real financial/inventory event - no intermediate model is needed.
+  salesOrderItemId String?
+  salesOrderItem   SalesOrderItem? @relation(fields: [salesOrderItemId], references: [id])
+
+  salesReturnItems SalesReturnItem[]
+
+  @@index([saleId])
+  @@map("sale_items")
+}
+
+// ---------------------------------------------------------------------------
+// Phase 1.14 - Quotations & Sales Orders
+//
+// Two genuinely new, additive models: a customer-facing Quotation (distinct
+// from the existing, procurement-side SupplierQuotation - an RFQ response
+// from a supplier - which this does not touch or duplicate) and a
+// SalesOrder (a pre-fulfillment commitment, distinct from Sale - the
+// existing completed-transaction/invoice record). The chain is
+// Quotation -> SalesOrder -> Sale, each conversion a one-way, guarded
+// status transition mirroring the exact PurchaseRequest -> RFQ ->
+// PurchaseOrder -> GoodsReceipt -> Purchase conversion pattern already
+// proven in Phase 1.9: each step creates a genuinely new row referencing
+// its source by id, never mutates or duplicates the source's own financial/
+// inventory effects, and a SalesOrder converts into an ORDINARY Sale (not a
+// parallel invoicing concept) so every existing Sale feature (return,
+// reverse, pay, reporting) works on it unchanged.
+// ---------------------------------------------------------------------------
+
+enum QuotationStatus {
+  DRAFT
+  SENT
+  ACCEPTED
+  REJECTED
+  EXPIRED
+  CANCELLED
+  CONVERTED
+}
+
+model Quotation {
+  id          String     @id @default(uuid())
+  tenantId    String
+  tenant      Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  // Nullable, mirroring Sale.branchId/warehouseId's identical optional-
+  // attribution pattern - a quotation is not required to be tied to a
+  // specific branch/warehouse at draft time.
+  branchId    String?
+  branch      Branch?    @relation(fields: [branchId], references: [id])
+  warehouseId String?
+  warehouse   Warehouse? @relation(fields: [warehouseId], references: [id])
+
+  quotationNumber String
+  customerId      String
+  customer        Customer        @relation(fields: [customerId], references: [id])
+  quotationDate   DateTime        @default(now())
+  validUntil      DateTime?
+  status          QuotationStatus @default(DRAFT)
+  subtotal        Decimal         @default(0) @db.Decimal(12, 2)
+  discount        Decimal         @default(0) @db.Decimal(12, 2)
+  tax             Decimal         @default(0) @db.Decimal(12, 2)
+  total           Decimal         @default(0) @db.Decimal(12, 2)
+  notes           String?
+  // Spec: "Terms & conditions" - a single free-text field, mirroring the
+  // existing lightweight Customer.notes/Sale.notes convention rather than a
+  // structured terms-template system.
+  terms           String?
+  // Spec: "Salesperson/user where supported" - the single "who this
+  // quotation belongs to" field, mirroring Sale.cashierId's identical role
+  // (defaults to the creating user; not a separate createdBy + salesperson
+  // pair, since nothing else in the codebase tracks those as distinct).
+  salesPersonId   String?
+  salesPerson     User?           @relation("QuotationSalesperson", fields: [salesPersonId], references: [id])
+
+  idempotencyKey String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  items      QuotationItem[]
+  salesOrder SalesOrder?
+
+  @@unique([tenantId, quotationNumber])
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId])
+  @@index([tenantId, customerId])
+  @@map("quotations")
+}
+
+model QuotationItem {
+  id          String          @id @default(uuid())
+  quotationId String
+  quotation   Quotation       @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+  productId   String
+  product     Product         @relation(fields: [productId], references: [id])
+  // Phase 1.8-style optional variant attribution, mirroring SaleItem.variantId.
+  variantId   String?
+  variant     ProductVariant? @relation(fields: [variantId], references: [id])
+  quantity    Decimal         @db.Decimal(12, 2)
+  unitPrice   Decimal         @db.Decimal(12, 2)
+  discount    Decimal         @default(0) @db.Decimal(12, 2)
+  // Per-line tax, mirroring the existing SupplierQuotationItem's identical
+  // per-line tax/discount precedent (unlike SaleItem/PurchaseItem, which
+  // only track discount per line and leave tax as an order-level
+  // aggregate) - appropriate here since a quotation is exactly the kind of
+  // document that needs to itemize tax per line for the customer.
+  tax         Decimal         @default(0) @db.Decimal(12, 2)
+  lineTotal   Decimal         @db.Decimal(12, 2)
+
+  @@index([quotationId])
+  @@map("quotation_items")
+}
+
+enum SalesOrderStatus {
+  DRAFT
+  CONFIRMED
+  PROCESSING
+  COMPLETED
+  CANCELLED
+}
+
+model SalesOrder {
+  id          String     @id @default(uuid())
+  tenantId    String
+  tenant      Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branchId    String?
+  branch      Branch?    @relation(fields: [branchId], references: [id])
+  warehouseId String?
+  warehouse   Warehouse? @relation(fields: [warehouseId], references: [id])
+
+  orderNumber       String
+  customerId        String
+  customer          Customer         @relation(fields: [customerId], references: [id])
+  // Set when this SalesOrder was created by converting an ACCEPTED
+  // Quotation (see quotations.routes.js POST /:id/convert) - unique, so a
+  // given quotation can produce at most one SalesOrder, mirroring
+  // PurchaseOrder.sourceQuotationId's identical Phase 1.9 1:1 pattern
+  // exactly (this is the DB-level second line of defense against a
+  // duplicate conversion, on top of the atomic status-flip guard in the
+  // route handler itself).
+  sourceQuotationId String?          @unique
+  sourceQuotation   Quotation?       @relation(fields: [sourceQuotationId], references: [id])
+  status            SalesOrderStatus @default(DRAFT)
+  // Aggregate-only, deliberately not per-line - mirrors PurchaseOrder's
+  // identical shape (also aggregate-only despite following a per-line-tax
+  // SupplierQuotationItem). When created from a Quotation, this is copied
+  // straight from the quotation's own aggregate tax; when fulfilled into a
+  // Sale, the created Sale's tax is this order's tax allocated
+  // proportionally to the converted subtotal share (the same proportional-
+  // allocation pattern Phase 1.13 established for partial-return tax).
+  subtotal          Decimal          @default(0) @db.Decimal(12, 2)
+  discount          Decimal          @default(0) @db.Decimal(12, 2)
+  tax               Decimal          @default(0) @db.Decimal(12, 2)
+  total             Decimal          @default(0) @db.Decimal(12, 2)
+  notes             String?
+
+  salesPersonId String?
+  salesPerson   User?   @relation("SalesOrderSalesperson", fields: [salesPersonId], references: [id])
+
+  idempotencyKey String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  items SalesOrderItem[]
+  sales Sale[]
+
+  @@unique([tenantId, orderNumber])
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId])
+  @@index([tenantId, customerId])
+  @@map("sales_orders")
+}
+
+model SalesOrderItem {
+  id                String          @id @default(uuid())
+  salesOrderId      String
+  salesOrder        SalesOrder      @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
+  productId         String
+  product           Product         @relation(fields: [productId], references: [id])
+  variantId         String?
+  variant           ProductVariant? @relation(fields: [variantId], references: [id])
+  quantity          Decimal         @db.Decimal(12, 2)
+  unitPrice         Decimal         @db.Decimal(12, 2)
+  discount          Decimal         @default(0) @db.Decimal(12, 2)
+  lineTotal         Decimal         @db.Decimal(12, 2)
+  // Running total of how much of this line has already been fulfilled
+  // (converted into a real Sale) across one or more conversions - the
+  // atomic guard against over-fulfillment under concurrency. Mirrors
+  // PurchaseOrderItem.receivedQuantity's identical Phase 1.9 pattern
+  // exactly (itself mirrored again by SaleItem.returnedQuantity/
+  // PurchaseItem.returnedQuantity in Phase 1.13).
+  fulfilledQuantity Decimal         @default(0) @db.Decimal(12, 2)
+
+  saleItems SaleItem[]
+
+  @@index([salesOrderId])
+  @@map("sales_order_items")
+}
+
+// ---------------------------------------------------------------------------
+// Optical Orders
+// ---------------------------------------------------------------------------
+
+enum OpticalOrderStatus {
+  PENDING
+  IN_LAB
+  // Phase 7: explicit quality-control step between lab work and being
+  // ready for pickup, matching the phase's stated job-card lifecycle.
+  QUALITY_CHECK
+  READY
+  DELIVERED
+  CANCELLED
+}
+
+model OpticalOrder {
+  id                     String                @id @default(uuid())
+  tenantId               String
+  tenant                 Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  // Phase 5.1: optional branch/warehouse attribution, mirroring Sale/Purchase's
+  // identical additive/nullable pattern - null for every pre-existing order
+  // (and any caller that never sends one), validated via the existing
+  // assertBranchAccess/assertWarehouseAccess on create when now needed for
+  // items-based stock deduction.
+  branchId               String?
+  branch                 Branch?               @relation(fields: [branchId], references: [id])
+  warehouseId            String?
+  warehouse              Warehouse?            @relation(fields: [warehouseId], references: [id])
+  customerId             String
+  customer               Customer              @relation(fields: [customerId], references: [id])
+  // Phase 7: optional patient link - nullable so every pre-Phase-7 order
+  // (and any order created without a clinical workflow) is unaffected.
+  patientId              String?
+  patient                Patient?              @relation(fields: [patientId], references: [id])
+  clinicalPrescriptionId String?
+  clinicalPrescription   ClinicalPrescription? @relation(fields: [clinicalPrescriptionId], references: [id])
+  labId                  String?
+  lab                    Lab?                  @relation(fields: [labId], references: [id])
+  labCost                Decimal?              @db.Decimal(12, 2)
+  qcPassed               Boolean?
+  qcNotes                String?
+  qcAt                   DateTime?
+  fittingNotes           String?
+  orderNumber            String
+  status                 OpticalOrderStatus    @default(PENDING)
+  frameDescription       String?
+  lensDescription        String?
+  totalAmount            Decimal               @default(0) @db.Decimal(12, 2)
+  amountPaid             Decimal               @default(0) @db.Decimal(12, 2)
+  expectedDeliveryDate   DateTime?
+  deliveredAt            DateTime?
+  notes                  String?
+  idempotencyKey         String?
+  createdAt              DateTime              @default(now())
+  updatedAt              DateTime              @updatedAt
+
+  prescription Prescription?
+  payments     Payment[]
+  // Phase 5.1: optional product-linked frame/lens lines - see OpticalOrderItem.
+  // frameDescription/lensDescription above stay free text and fully unaffected,
+  // so a custom/one-off item not in inventory can still be recorded exactly as
+  // before; an order using items instead gets real stock deduction and COGS.
+  items        OpticalOrderItem[]
+
+  @@unique([tenantId, orderNumber])
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId])
+  @@index([tenantId, patientId])
+  @@map("optical_orders")
+}
+
+// Phase 5.1: a frame or lens actually taken from tracked inventory (ProductType
+// FRAME/LENS, or any product a shop chooses) for this order - deducted from
+// stock and costed into COGS exactly like a SaleItem, reusing the identical
+// atomic-conditional-deduction pattern (see opticalOrders.routes.js). An order
+// with no items (frameDescription/lensDescription free text only, or a
+// service-only visit) is completely unaffected - this table stays empty for it.
+model OpticalOrderItem {
+  id             String       @id @default(uuid())
+  opticalOrderId String
+  opticalOrder   OpticalOrder @relation(fields: [opticalOrderId], references: [id], onDelete: Cascade)
+  productId      String
+  product        Product      @relation(fields: [productId], references: [id])
+  quantity       Decimal      @default(1) @db.Decimal(12, 2)
+  unitPrice      Decimal      @db.Decimal(12, 2)
+  lineTotal      Decimal      @db.Decimal(12, 2)
+
+  @@index([opticalOrderId])
+  @@map("optical_order_items")
+}
+
+model Prescription {
+  id             String       @id @default(uuid())
+  opticalOrderId String       @unique
+  opticalOrder   OpticalOrder @relation(fields: [opticalOrderId], references: [id], onDelete: Cascade)
+
+  // Right eye
+  odSphere   Decimal? @db.Decimal(5, 2)
+  odCylinder Decimal? @db.Decimal(5, 2)
+  odAxis     Int?
+  odAdd      Decimal? @db.Decimal(5, 2)
+
+  // Left eye
+  osSphere   Decimal? @db.Decimal(5, 2)
+  osCylinder Decimal? @db.Decimal(5, 2)
+  osAxis     Int?
+  osAdd      Decimal? @db.Decimal(5, 2)
+
+  pd           Decimal?  @db.Decimal(5, 2) // pupillary distance
+  prescribedBy String?
+  prescribedAt DateTime?
+  notes        String?
+
+  @@map("prescriptions")
+}
+
+// ---------------------------------------------------------------------------
+// Payments / Expenses
+// ---------------------------------------------------------------------------
+
+enum PaymentDirection {
+  IN // received from customer
+  OUT // paid to supplier / expense
+}
+
+enum PaymentRecordStatus {
+  COMPLETED
+  REVERSED
+}
+
+model Payment {
+  id             String              @id @default(uuid())
+  tenantId       String
+  tenant         Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  direction      PaymentDirection
+  amount         Decimal             @db.Decimal(12, 2)
+  method         String              @default("cash")
+  saleId         String?
+  sale           Sale?               @relation(fields: [saleId], references: [id])
+  purchaseId     String?
+  purchase       Purchase?           @relation(fields: [purchaseId], references: [id])
+  customerId     String?
+  customer       Customer?           @relation(fields: [customerId], references: [id])
+  supplierId     String?
+  supplier       Supplier?           @relation(fields: [supplierId], references: [id])
+  expenseId      String?             @unique
+  expense        Expense?            @relation(fields: [expenseId], references: [id])
+  opticalOrderId String?
+  opticalOrder   OpticalOrder?       @relation(fields: [opticalOrderId], references: [id])
+  note           String?
+  paidAt         DateTime            @default(now())
+  createdAt      DateTime            @default(now())
+  // Phase 1.11: every field below is additive/nullable so every existing
+  // Payment row (created as a side effect of Sale/Purchase/Expense/Optical
+  // Order, exactly as before) is completely unaffected.
+  // Client-generated key so a retried payment submission (flaky connection,
+  // offline outbox retry) is recognized as the same operation instead of
+  // double-recording it - mirrors the identical pattern already used by
+  // Purchase/Sale/StockTransfer/GoodsReceipt/InventoryTransaction.
+  idempotencyKey String?
+  // Populated for every NEW payment going forward (standalone /payments
+  // creates, and the inline Sale/Purchase-creation and /pay paths) via the
+  // existing shared nextSequenceNumber utility - null on historical rows.
+  receiptNumber  String?
+  // COMPLETED unless explicitly reversed via POST /payments/:id/reverse -
+  // the existing Sale/Purchase-side inline payments and /pay endpoints never
+  // set this away from its default, so their own behavior is unchanged.
+  status         PaymentRecordStatus @default(COMPLETED)
+  // Attribution only (mirrors Sale.warehouseId/Purchase.warehouseId's
+  // identical Phase 1.8/1.9 design) - derived from the linked sale/purchase's
+  // own branch when there is one, or explicit for a standalone customer/
+  // supplier payment. Does not drive any stock/inventory effect (payments
+  // have none).
+  branchId       String?
+  branch         Branch?             @relation(fields: [branchId], references: [id])
+  // A standalone payment (POST /payments) can be split across multiple open
+  // sales/purchases - see PaymentAllocation. A payment created inline by
+  // Sale/Purchase creation, or via the existing Purchase :id/pay endpoint,
+  // has no allocations (it already targets exactly one sale/purchase via the
+  // saleId/purchaseId columns above, unchanged).
+  allocations    PaymentAllocation[]
+  // Phase 1.13: a refund of a Customer Credit Note (direction OUT - money
+  // leaving the business back to the customer) or a Supplier Debit Note
+  // (direction IN - the supplier paying the business back). Both optional
+  // and mutually exclusive with every other link above, reusing this same
+  // Payment model rather than a second payment/refund engine.
+  creditNoteId   String?
+  creditNote     CreditNote?         @relation(fields: [creditNoteId], references: [id])
+  debitNoteId    String?
+  debitNote      DebitNote?          @relation(fields: [debitNoteId], references: [id])
+
+  @@unique([tenantId, idempotencyKey])
+  @@unique([tenantId, receiptNumber])
+  @@index([tenantId])
+  @@map("payments")
+}
+
+// Phase 1.11: records how a standalone Payment's amount was applied across
+// one or more open Sales/Purchases. This is a breakdown/audit record only -
+// the actual, authoritative "amount paid so far" for a Sale/Purchase remains
+// its own existing amountPaid field (updated atomically alongside each
+// allocation, exactly as Sale's new :id/pay and Purchase's existing :id/pay
+// already update it for the single-target case) - nothing reads
+// PaymentAllocation rows to compute a balance; they exist purely so a
+// receipt can show "this payment covered these specific invoices."
+model PaymentAllocation {
+  id         String    @id @default(uuid())
+  tenantId   String
+  tenant     Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  paymentId  String
+  payment    Payment   @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  saleId     String?
+  sale       Sale?     @relation(fields: [saleId], references: [id])
+  purchaseId String?
+  purchase   Purchase? @relation(fields: [purchaseId], references: [id])
+  amount     Decimal   @db.Decimal(12, 2)
+  createdAt  DateTime  @default(now())
+
+  @@index([tenantId])
+  @@index([paymentId])
+  @@map("payment_allocations")
+}
+
+// ---------------------------------------------------------------------------
+// Phase 1.13: Returns, Credit Notes & Debit Notes
+//
+// Sale's own :id/reverse and Purchase's own :id/return (Phase 1.8/1.9)
+// already handle the "undo the WHOLE document" case atomically and are
+// unchanged by this phase. SalesReturn/PurchaseReturn below are a distinct,
+// additive capability: a PARTIAL, line-item-level return that can happen
+// multiple times against the same Sale/Purchase, tracked via
+// SaleItem.returnedQuantity/PurchaseItem.returnedQuantity (the same atomic-
+// conditional-increment guard pattern already used for
+// PurchaseOrderItem.receivedQuantity, Sale/Purchase amountPaid, etc.) -
+// never a blind re-implementation of what those two endpoints already do.
+//
+// A SalesReturn/PurchaseReturn always posts exactly one journal entry of its
+// own (Dr Inventory / Cr COGS for the returned goods' cost, plus - when
+// `issueCreditNote`/`issueDebitNote` is true, the default - Dr Revenue+Tax /
+// Cr Accounts Receivable, or the mirror for Purchase/Payable) rather than
+// posting through a separately-created CreditNote/DebitNote's own posting
+// logic, so the two effects can never be double-posted. A CreditNote/
+// DebitNote created standalone (no linked return) posts its own entry, since
+// there is no accompanying return entry to combine with.
+// ---------------------------------------------------------------------------
+
+enum ReturnStatus {
+  COMPLETED
+  REVERSED
+}
+
+model SalesReturn {
+  id             String       @id @default(uuid())
+  tenantId       String
+  tenant         Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  returnNumber   String?
+  saleId         String
+  sale           Sale         @relation(fields: [saleId], references: [id])
+  customerId     String?
+  customer       Customer?    @relation(fields: [customerId], references: [id])
+  branchId       String?
+  branch         Branch?      @relation(fields: [branchId], references: [id])
+  // Attribution only, mirroring Sale.warehouseId's identical Phase 1.8
+  // design - does not drive per-warehouse WarehouseStock adjustment
+  // (Product.stockQuantity remains the sole target, consistent with Sale/
+  // Purchase/Expense's own already-disclosed limitation).
+  warehouseId    String?
+  warehouse      Warehouse?   @relation(fields: [warehouseId], references: [id])
+  reason         String?
+  notes          String?
+  subtotal       Decimal      @db.Decimal(12, 2)
+  tax            Decimal      @default(0) @db.Decimal(12, 2)
+  total          Decimal      @db.Decimal(12, 2)
+  status         ReturnStatus @default(COMPLETED)
+  idempotencyKey String?
+  createdById    String?
+  createdBy      User?        @relation("SalesReturnCreatedBy", fields: [createdById], references: [id])
+  reversedAt     DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  items      SalesReturnItem[]
+  creditNote CreditNote?
+
+  @@unique([tenantId, returnNumber])
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId])
+  @@index([tenantId, saleId])
+  @@map("sales_returns")
+}
+
+model SalesReturnItem {
+  id            String      @id @default(uuid())
+  salesReturnId String
+  salesReturn   SalesReturn @relation(fields: [salesReturnId], references: [id], onDelete: Cascade)
+  saleItemId    String
+  saleItem      SaleItem    @relation(fields: [saleItemId], references: [id])
+  productId     String
+  product       Product     @relation(fields: [productId], references: [id])
+  quantity      Decimal     @db.Decimal(12, 2)
+  unitPrice     Decimal     @db.Decimal(12, 2)
+  lineTotal     Decimal     @db.Decimal(12, 2)
+
+  @@index([salesReturnId])
+  @@index([saleItemId])
+  @@map("sales_return_items")
+}
+
+model PurchaseReturn {
+  id             String       @id @default(uuid())
+  tenantId       String
+  tenant         Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  returnNumber   String?
+  purchaseId     String
+  purchase       Purchase     @relation(fields: [purchaseId], references: [id])
+  supplierId     String?
+  supplier       Supplier?    @relation(fields: [supplierId], references: [id])
+  branchId       String?
+  branch         Branch?      @relation(fields: [branchId], references: [id])
+  warehouseId    String?
+  warehouse      Warehouse?   @relation(fields: [warehouseId], references: [id])
+  reason         String?
+  notes          String?
+  subtotal       Decimal      @db.Decimal(12, 2)
+  tax            Decimal      @default(0) @db.Decimal(12, 2)
+  total          Decimal      @db.Decimal(12, 2)
+  status         ReturnStatus @default(COMPLETED)
+  idempotencyKey String?
+  createdById    String?
+  createdBy      User?        @relation("PurchaseReturnCreatedBy", fields: [createdById], references: [id])
+  reversedAt     DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  items     PurchaseReturnItem[]
+  debitNote DebitNote?
+
+  @@unique([tenantId, returnNumber])
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId])
+  @@index([tenantId, purchaseId])
+  @@map("purchase_returns")
+}
+
+model PurchaseReturnItem {
+  id               String         @id @default(uuid())
+  purchaseReturnId String
+  purchaseReturn   PurchaseReturn @relation(fields: [purchaseReturnId], references: [id], onDelete: Cascade)
+  purchaseItemId   String
+  purchaseItem     PurchaseItem   @relation(fields: [purchaseItemId], references: [id])
+  productId        String
+  product          Product        @relation(fields: [productId], references: [id])
+  quantity         Decimal        @db.Decimal(12, 2)
+  unitCost         Decimal        @db.Decimal(12, 2)
+  lineTotal        Decimal        @db.Decimal(12, 2)
+
+  @@index([purchaseReturnId])
+  @@index([purchaseItemId])
+  @@map("purchase_return_items")
+}
+
+enum CreditNoteStatus {
+  ISSUED
+  CANCELLED
+}
+
+// Represents a financial credit owed to a customer - either generated
+// automatically alongside a SalesReturn (the common case, one atomic
+// transaction, one journal entry - see the module header comment above) or
+// created standalone for another legitimate credit adjustment (Section 4's
+// "price/amount adjustment" case), which posts its own journal entry since
+// there is no return to combine it with.
+model CreditNote {
+  id               String           @id @default(uuid())
+  tenantId         String
+  tenant           Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  creditNoteNumber String?
+  customerId       String
+  customer         Customer         @relation(fields: [customerId], references: [id])
+  // At most one CreditNote per SalesReturn (the auto-issued case) - a
+  // standalone credit note (Section 4's "other adjustment" case) has none.
+  salesReturnId    String?          @unique
+  salesReturn      SalesReturn?     @relation(fields: [salesReturnId], references: [id])
+  branchId         String?
+  branch           Branch?          @relation(fields: [branchId], references: [id])
+  amount           Decimal          @db.Decimal(12, 2)
+  tax              Decimal          @default(0) @db.Decimal(12, 2)
+  reason           String?
+  notes            String?
+  status           CreditNoteStatus @default(ISSUED)
+  // How much of `amount` has been paid out as an actual cash refund so far
+  // (POST /credit-notes/:id/refund) - atomically guarded never to exceed
+  // `amount`, mirroring Sale's/Purchase's own amountPaid accumulation
+  // pattern exactly. A credit note with refundedAmount < amount still has
+  // an outstanding customer-facing credit; this module does not track how a
+  // customer "spends" an unrefunded credit against a future sale (see this
+  // phase's report, Known Limitations).
+  refundedAmount   Decimal          @default(0) @db.Decimal(12, 2)
+  // Phase 2.2: how much of `amount` has been applied against the customer's
+  // open invoices (NoteApplication). available = amount - refundedAmount - appliedAmount.
+  appliedAmount    Decimal          @default(0) @db.Decimal(12, 2)
+  // Phase 2.4: set when this note was issued by reversing a Sale that already had money
+  // collected against it - the amount the customer keeps as a credit (refundable or
+  // appliable like any other note). The reversal entry already recognized it in the
+  // ledger, so the note has no journal entry of its own and cannot be cancelled directly.
+  reversedSaleId   String?          @unique
+  // Phase 7.1: the identical pattern as reversedSaleId above, for an Optical
+  // Order cancelled after money was already collected against it - the same
+  // reuse of CreditNote rather than a second refund/credit mechanism.
+  reversedOpticalOrderId String?    @unique
+  idempotencyKey   String?
+  createdById      String?
+  createdBy        User?            @relation("CreditNoteCreatedBy", fields: [createdById], references: [id])
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  refundPayments Payment[]
+  applications   NoteApplication[]
+
+  @@unique([tenantId, creditNoteNumber])
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId])
+  @@index([tenantId, customerId])
+  @@map("credit_notes")
+}
+
+enum DebitNoteStatus {
+  ISSUED
+  CANCELLED
+}
+
+// Mirrors CreditNote exactly for the supplier side - a financial debit
+// against a supplier, either auto-issued alongside a PurchaseReturn or
+// created standalone.
+model DebitNote {
+  id                 String          @id @default(uuid())
+  tenantId           String
+  tenant             Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  debitNoteNumber    String?
+  supplierId         String
+  supplier           Supplier        @relation(fields: [supplierId], references: [id])
+  purchaseReturnId   String?         @unique
+  purchaseReturn     PurchaseReturn? @relation(fields: [purchaseReturnId], references: [id])
+  branchId           String?
+  branch             Branch?         @relation(fields: [branchId], references: [id])
+  amount             Decimal         @db.Decimal(12, 2)
+  tax                Decimal         @default(0) @db.Decimal(12, 2)
+  reason             String?
+  notes              String?
+  status             DebitNoteStatus @default(ISSUED)
+  // How much the supplier has actually paid back so far (POST
+  // /debit-notes/:id/refund) - atomically guarded never to exceed `amount`.
+  refundedAmount     Decimal         @default(0) @db.Decimal(12, 2)
+  // Phase 2.2: mirror of CreditNote.appliedAmount for the supplier side.
+  appliedAmount      Decimal         @default(0) @db.Decimal(12, 2)
+  // Phase 2.4: mirror of CreditNote.reversedSaleId for a returned (whole) Purchase.
+  returnedPurchaseId String?         @unique
+  idempotencyKey     String?
+  createdById        String?
+  createdBy          User?           @relation("DebitNoteCreatedBy", fields: [createdById], references: [id])
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+
+  refundPayments Payment[]
+  applications   NoteApplication[]
+
+  @@unique([tenantId, debitNoteNumber])
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId])
+  @@index([tenantId, supplierId])
+  @@map("debit_notes")
+}
+
+// Phase 2.2: applying an already-issued Credit Note (customer) or Debit Note
+// (supplier) against one or more open invoices/purchases. The note's own
+// journal entry already moved Accounts Receivable/Payable when it was issued,
+// so an application has NO journal impact - it only allocates that existing
+// credit to specific documents (Sale.amountPaid / Purchase.amountPaid are
+// increased by the applied amount, exactly like a payment, so every existing
+// balance/aging/dashboard consumer of total - amountPaid stays correct).
+enum NoteApplicationStatus {
+  ACTIVE
+  REVERSED
+}
+
+model NoteApplication {
+  id             String                @id @default(uuid())
+  tenantId       String
+  tenant         Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  creditNoteId   String?
+  creditNote     CreditNote?           @relation(fields: [creditNoteId], references: [id])
+  debitNoteId    String?
+  debitNote      DebitNote?            @relation(fields: [debitNoteId], references: [id])
+  amount         Decimal               @db.Decimal(12, 2)
+  status         NoteApplicationStatus @default(ACTIVE)
+  branchId       String?
+  idempotencyKey String?
+  createdById    String?
+  createdAt      DateTime              @default(now())
+  reversedAt     DateTime?
+  lines          NoteApplicationLine[]
+
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId])
+  @@index([creditNoteId])
+  @@index([debitNoteId])
+  @@map("note_applications")
+}
+
+model NoteApplicationLine {
+  id            String          @id @default(uuid())
+  tenantId      String
+  tenant        Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  applicationId String
+  application   NoteApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  saleId        String?
+  sale          Sale?           @relation(fields: [saleId], references: [id])
+  purchaseId    String?
+  purchase      Purchase?       @relation(fields: [purchaseId], references: [id])
+  amount        Decimal         @db.Decimal(12, 2)
+
+  @@index([tenantId])
+  @@index([applicationId])
+  @@map("note_application_lines")
+}
+
+// Phase 3.3.4: multi-terminal reconciliation. A terminal (one browser/device) reports what it still holds
+// unsent and which of its queued transactions the server refused, so a manager can see - across every
+// terminal - who is sitting on unsynced work and which conflicts nobody has looked at. This is visibility
+// and hand-off only: it never changes accounting or inventory (the outboxes and their server guards do that).
+enum SyncIssueStatus {
+  OPEN
+  ACKNOWLEDGED
+  RESOLVED
+}
+
+model SyncTerminal {
+  id               String      @id @default(uuid())
+  tenantId         String
+  tenant           Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  terminalId       String
+  label            String?
+  userId           String?
+  userName         String?
+  pendingCount     Int         @default(0)
+  conflictCount    Int         @default(0)
+  failedCount      Int         @default(0)
+  oldestPendingAt  DateTime?
+  lastReportSentAt DateTime?
+  lastSeenAt       DateTime    @default(now())
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+  issues           SyncIssue[]
+
+  @@unique([tenantId, terminalId])
+  @@index([tenantId])
+  @@map("sync_terminals")
+}
+
+model SyncIssue {
+  id               String          @id @default(uuid())
+  tenantId         String
+  tenant           Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  terminalRecordId String
+  terminal         SyncTerminal    @relation(fields: [terminalRecordId], references: [id], onDelete: Cascade)
+  clientId         String
+  entity           String
+  kind             String
+  code             String?
+  message          String
+  details          Json?
+  status           SyncIssueStatus @default(OPEN)
+  firstReportedAt  DateTime        @default(now())
+  lastReportedAt   DateTime        @default(now())
+  acknowledgedById String?
+  acknowledgedAt   DateTime?
+  acknowledgeNote  String?
+  resolvedAt       DateTime?
+  resolution       String?
+
+  @@unique([terminalRecordId, clientId])
+  @@index([tenantId, status])
+  @@map("sync_issues")
+}
+
+model ExpenseCategory {
+  id        String   @id @default(uuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name      String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  expenses Expense[]
+  account  Account?
+
+  @@unique([tenantId, name])
+  @@map("expense_categories")
+}
+
+enum ExpenseStatus {
+  PAID
+  REVERSED
+}
+
+model Expense {
+  id             String          @id @default(uuid())
+  tenantId       String
+  tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  categoryId     String
+  category       ExpenseCategory @relation(fields: [categoryId], references: [id])
+  // Phase 6: nullable/backfilled NULL for pre-Phase-6 rows, same rationale
+  // as Sale.branchId/Purchase.branchId from Phase 4.
+  branchId       String?
+  branch         Branch?         @relation(fields: [branchId], references: [id])
+  amount         Decimal         @db.Decimal(12, 2)
+  description    String?
+  expenseDate    DateTime        @default(now())
+  idempotencyKey String?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  // Phase 1.12: every field below is additive/nullable so every existing
+  // Expense row is completely unaffected.
+  // Populated via the existing shared nextSequenceNumber utility (Phase
+  // 0.6), mirroring Sale.invoiceNumber/Purchase.purchaseNumber/
+  // Payment.receiptNumber exactly - null on historical rows.
+  expenseNumber  String?
+  // Free-text notes, mirroring the identical lightweight pattern already
+  // used by Sale.notes/Purchase.notes/Customer.notes/Supplier.notes -
+  // distinct from `description` (the existing memo/reason field).
+  notes          String?
+  // Optional payee attribution - a supplier being paid for a bill/service
+  // (reuses the existing Supplier entity, no new concept) and/or an
+  // employee/user being reimbursed. Both optional and independent; neither
+  // drives any workflow of its own (see this phase's report, Deferred
+  // Items, for why a full reimbursement workflow was not built).
+  supplierId     String?
+  supplier       Supplier?       @relation(fields: [supplierId], references: [id])
+  payeeUserId    String?
+  payee          User?           @relation("ExpensePayee", fields: [payeeUserId], references: [id])
+  createdById    String?
+  createdBy      User?           @relation("ExpenseCreatedBy", fields: [createdById], references: [id])
+  // PAID unless explicitly reversed via POST /expenses/:id/reverse - every
+  // existing expense-creating code path already always paid immediately
+  // (see this phase's report, Expense Lifecycle), so defaulting to PAID
+  // keeps every pre-Phase-1.12 row's meaning unchanged.
+  status         ExpenseStatus   @default(PAID)
+  reversedAt     DateTime?
+
+  payment Payment?
+
+  @@unique([tenantId, idempotencyKey])
+  @@unique([tenantId, expenseNumber])
+  @@index([tenantId])
+  @@index([tenantId, branchId])
+  @@map("expenses")
+}
+
+// ---------------------------------------------------------------------------
+// Audit Log
+// ---------------------------------------------------------------------------
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  tenantId  String?
+  tenant    Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id])
+  // Phase 1.15: optional branch attribution - nullable/backfilled NULL for
+  // every pre-existing row and every action with no natural branch (e.g. a
+  // tenant-wide setting change), mirroring the same optional-attribution
+  // pattern used on Sale/Purchase/Notification/etc. since Phase 1.8. Not
+  // enforced as a hard scope boundary here (AuditLog access is
+  // MANAGEMENT-only and MANAGEMENT is branch-unrestricted - see
+  // activityLog.routes.js) but recorded so a future branch-restricted
+  // viewer, or a "history for this branch" filter, has the data to work
+  // with without a second migration.
+  branchId  String?
+  branch    Branch?  @relation(fields: [branchId], references: [id])
+  action    String // e.g. "LOGIN", "SALE_CREATE", "STOCK_ADJUST"
+  entity    String? // e.g. "Sale", "Product"
+  entityId  String?
+  metadata  Json?
+  ipAddress String?
+  createdAt DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+  // Phase 1.15: added to support the new GET /api/activity-log's filters
+  // (Section 15's "Entity type, Entity ID, Action" requirements) without a
+  // full-partition scan - this log was write-only before this phase (no
+  // read endpoint existed), so no query pattern had ever needed these.
+  @@index([tenantId, entity, entityId])
+  @@index([tenantId, action])
+  @@map("audit_logs")
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5 - Accounting (double-entry)
+// ---------------------------------------------------------------------------
+
+enum AccountType {
+  ASSET
+  LIABILITY
+  EQUITY
+  REVENUE
+  EXPENSE
+}
+
+model Account {
+  id                String           @id @default(uuid())
+  tenantId          String
+  tenant            Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  code              String
+  name              String
+  type              AccountType
+  parentId          String?
+  parent            Account?         @relation("AccountHierarchy", fields: [parentId], references: [id])
+  children          Account[]        @relation("AccountHierarchy")
+  // Stable internal key the posting engine uses to find "the Cash account",
+  // "the Accounts Receivable account", etc. regardless of what the tenant
+  // has renamed code/name to. Never shown to the user as an identifier.
+  systemKey         String?
+  // One system expense account is auto-created per ExpenseCategory the first
+  // time it's posted against, so existing expense categories map 1:1 to a
+  // ledger account without the tenant having to configure anything.
+  expenseCategoryId String?          @unique
+  expenseCategory   ExpenseCategory? @relation(fields: [expenseCategoryId], references: [id])
+  isSystem          Boolean          @default(false)
+  isActive          Boolean          @default(true)
+  // Phase 2.1: optional free-text description shown in the Chart of Accounts.
+  description       String?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  journalLines JournalLine[]
+
+  @@unique([tenantId, code])
+  @@unique([tenantId, systemKey])
+  @@index([tenantId])
+  @@index([tenantId, type])
+  @@map("accounts")
+}
+
+enum JournalSourceType {
+  SALE
+  SALE_REVERSAL
+  PURCHASE
+  PURCHASE_RETURN
+  PAYMENT
+  // Phase 1.11: mirrors SALE_REVERSAL/PURCHASE_RETURN's existing precedent of
+  // a reversal getting its own distinct source type, rather than reusing
+  // PAYMENT for both directions and making reversal entries indistinguishable
+  // in reports.
+  PAYMENT_REVERSAL
+  EXPENSE
+  // Phase 1.12: same precedent as SALE_REVERSAL/PURCHASE_RETURN/
+  // PAYMENT_REVERSAL - a reversed expense gets its own distinct source type.
+  EXPENSE_REVERSAL
+  // Phase 1.13: a PARTIAL, line-item-level sales return (SalesReturn) -
+  // distinct from SALE_REVERSAL, which is Sale's own existing WHOLE-sale
+  // reversal. PURCHASE_RETURN above is deliberately reused for the new
+  // PurchaseReturn model's own issuing entry (the existing type already
+  // correctly labels the same real-world event; sourceId, not sourceType,
+  // distinguishes the old whole-purchase-return endpoint's entries from the
+  // new partial PurchaseReturn's own) - Sale has no equivalent existing type
+  // to reuse, hence this new one.
+  SALES_RETURN
+  SALES_RETURN_REVERSAL
+  PURCHASE_RETURN_REVERSAL
+  CREDIT_NOTE
+  CREDIT_NOTE_CANCEL
+  CREDIT_NOTE_REFUND
+  DEBIT_NOTE
+  DEBIT_NOTE_CANCEL
+  DEBIT_NOTE_REFUND
+  OPTICAL_ORDER
+  OPENING_BALANCE
+  MANUAL
+  ADJUSTMENT
+  // Phase 2.4: stock gains/losses and opening stock (Inventory vs Inventory Adjustments /
+  // Opening Balance Equity).
+  INVENTORY_ADJUSTMENT
+}
+
+enum JournalStatus {
+  POSTED
+  VOID
+  // Phase 2.1: a manual entry can be saved as a DRAFT (not yet in the ledger -
+  // every report/balance query already filters status: 'POSTED', so drafts are
+  // invisible to them by construction) and later posted; a discarded draft
+  // becomes CANCELLED rather than being deleted, so its entry number is never
+  // reused (numbering is count-based).
+  DRAFT
+  CANCELLED
+}
+
+model JournalEntry {
+  id             String            @id @default(uuid())
+  tenantId       String
+  tenant         Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branchId       String?
+  branch         Branch?           @relation(fields: [branchId], references: [id])
+  entryNumber    String
+  date           DateTime          @default(now())
+  memo           String?
+  sourceType     JournalSourceType
+  // The originating business record's id (Sale/Purchase/Expense/etc) - lets
+  // every report drill down from a ledger line back to the transaction that
+  // caused it, per the Phase 5 "all postings must be traceable" rule.
+  sourceId       String?
+  status         JournalStatus     @default(POSTED)
+  // A correction never edits or deletes a posted entry - it posts a second,
+  // exactly-mirrored entry referencing the first, and both remain visible.
+  reversalOfId   String?           @unique
+  reversalOf     JournalEntry?     @relation("JournalReversal", fields: [reversalOfId], references: [id])
+  reversedBy     JournalEntry?     @relation("JournalReversal")
+  postedById     String?
+  postedBy       User?             @relation(fields: [postedById], references: [id])
+  // Phase 2.1: free-text external reference (e.g. a voucher number), distinct
+  // from memo (the description) and from sourceType/sourceId (the
+  // system-generated link to an originating business record).
+  reference      String?
+  // Client-generated key so a retried manual/opening-balance posting is
+  // recognized as the same operation - same pattern as Sale/Purchase/etc.
+  idempotencyKey String?
+  createdById    String?
+  // When the entry entered the ledger. Null for every pre-Phase-2.1 row
+  // (createdAt is the fallback) and for entries still in DRAFT.
+  postedAt       DateTime?
+  createdAt      DateTime          @default(now())
+
+  lines JournalLine[]
+
+  @@unique([tenantId, idempotencyKey])
+  @@unique([tenantId, entryNumber])
+  @@index([tenantId, date])
+  @@index([tenantId, sourceType, sourceId])
+  @@map("journal_entries")
+}
+
+model JournalLine {
+  id             String       @id @default(uuid())
+  journalEntryId String
+  journalEntry   JournalEntry @relation(fields: [journalEntryId], references: [id], onDelete: Cascade)
+  accountId      String
+  account        Account      @relation(fields: [accountId], references: [id])
+  debit          Decimal      @default(0) @db.Decimal(14, 2)
+  credit         Decimal      @default(0) @db.Decimal(14, 2)
+  description    String?
+  // Optional sub-ledger dimension - lets Customer/Supplier Ledger reports
+  // reconcile directly against Accounts Receivable/Payable journal activity.
+  customerId     String?
+  customer       Customer?    @relation(fields: [customerId], references: [id])
+  supplierId     String?
+  supplier       Supplier?    @relation(fields: [supplierId], references: [id])
+
+  @@index([accountId])
+  @@index([journalEntryId])
+  @@index([customerId])
+  @@index([supplierId])
+  @@map("journal_lines")
+}
+
+model AccountingPeriod {
+  id         String    @id @default(uuid())
+  tenantId   String
+  tenant     Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name       String
+  startDate  DateTime
+  endDate    DateTime
+  status     String    @default("OPEN") // OPEN | CLOSED
+  closedAt   DateTime?
+  closedById String?
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+  @@map("accounting_periods")
+}
+
+model TaxRate {
+  id          String   @id @default(uuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name        String
+  rate        Decimal  @db.Decimal(6, 3)
+  isInclusive Boolean  @default(false)
+  isActive    Boolean  @default(true)
+  isDefault   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+  @@map("tax_rates")
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5 - Professional Procurement
+// ---------------------------------------------------------------------------
+
+enum ProcurementStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+  CANCELLED
+  PARTIALLY_RECEIVED
+  RECEIVED
+  CLOSED
+}
+
+model PurchaseRequest {
+  id              String            @id @default(uuid())
+  tenantId        String
+  tenant          Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branchId        String?
+  branch          Branch?           @relation(fields: [branchId], references: [id])
+  // Phase 1.9: optional warehouse attribution, mirroring the identical
+  // pattern used on Sale/Purchase/PurchaseOrder/GoodsReceipt.
+  warehouseId     String?
+  warehouse       Warehouse?        @relation(fields: [warehouseId], references: [id])
+  requestNumber   String
+  status          ProcurementStatus @default(PENDING_APPROVAL)
+  // Phase 4.3: when the business needs the goods by - purely informational
+  // (does not drive any automatic escalation), shown on the request and
+  // carried through to the RFQ/PO screens so buyers can prioritize.
+  requiredDate    DateTime?
+  notes           String?
+  requestedById   String?
+  requestedBy     User?             @relation("PRRequestedBy", fields: [requestedById], references: [id])
+  approvedById    String?
+  approvedBy      User?             @relation("PRApprovedBy", fields: [approvedById], references: [id])
+  approvedAt      DateTime?
+  rejectionReason String?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  items PurchaseRequestItem[]
+  rfqs  RFQ[]
+
+  @@unique([tenantId, requestNumber])
+  @@index([tenantId])
+  @@map("purchase_requests")
+}
+
+model PurchaseRequestItem {
+  id                String          @id @default(uuid())
+  purchaseRequestId String
+  purchaseRequest   PurchaseRequest @relation(fields: [purchaseRequestId], references: [id], onDelete: Cascade)
+  productId         String
+  product           Product         @relation(fields: [productId], references: [id])
+  quantity          Decimal         @db.Decimal(12, 2)
+  note              String?
+
+  @@index([purchaseRequestId])
+  @@map("purchase_request_items")
+}
+
+model RFQ {
+  id                String           @id @default(uuid())
+  tenantId          String
+  tenant            Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  purchaseRequestId String?
+  purchaseRequest   PurchaseRequest? @relation(fields: [purchaseRequestId], references: [id])
+  rfqNumber         String
+  status            String           @default("OPEN") // OPEN | CLOSED | CANCELLED
+  // Phase 4.3: when the buyer needs delivery by - shown to staff recording a
+  // supplier's quotation and carried onto the resulting PO; purely informational.
+  expectedDeliveryDate DateTime?
+  createdById       String?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  items      RFQItem[]
+  suppliers  RFQSupplier[]
+  quotations SupplierQuotation[]
+
+  @@unique([tenantId, rfqNumber])
+  @@index([tenantId])
+  @@map("rfqs")
+}
+
+model RFQItem {
+  id        String  @id @default(uuid())
+  rfqId     String
+  rfq       RFQ     @relation(fields: [rfqId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+  quantity  Decimal @db.Decimal(12, 2)
+
+  @@index([rfqId])
+  @@map("rfq_items")
+}
+
+model RFQSupplier {
+  id         String   @id @default(uuid())
+  rfqId      String
+  rfq        RFQ      @relation(fields: [rfqId], references: [id], onDelete: Cascade)
+  supplierId String
+  supplier   Supplier @relation(fields: [supplierId], references: [id])
+
+  @@unique([rfqId, supplierId])
+  @@map("rfq_suppliers")
+}
+
+model SupplierQuotation {
+  id           String    @id @default(uuid())
+  tenantId     String
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  rfqId        String
+  rfq          RFQ       @relation(fields: [rfqId], references: [id])
+  supplierId   String
+  supplier     Supplier  @relation(fields: [supplierId], references: [id])
+  validUntil   DateTime?
+  deliveryDays Int?
+  notes        String?
+  status       String    @default("RECEIVED") // RECEIVED | SELECTED | REJECTED
+  subtotal     Decimal   @default(0) @db.Decimal(12, 2)
+  tax          Decimal   @default(0) @db.Decimal(12, 2)
+  discount     Decimal   @default(0) @db.Decimal(12, 2)
+  total        Decimal   @default(0) @db.Decimal(12, 2)
+  createdAt    DateTime  @default(now())
+
+  items         SupplierQuotationItem[]
+  purchaseOrder PurchaseOrder?
+
+  @@index([tenantId, rfqId])
+  @@map("supplier_quotations")
+}
+
+model SupplierQuotationItem {
+  id          String            @id @default(uuid())
+  quotationId String
+  quotation   SupplierQuotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+  productId   String
+  product     Product           @relation(fields: [productId], references: [id])
+  quantity    Decimal           @db.Decimal(12, 2)
+  unitPrice   Decimal           @db.Decimal(12, 2)
+  tax         Decimal           @default(0) @db.Decimal(12, 2)
+  discount    Decimal           @default(0) @db.Decimal(12, 2)
+  lineTotal   Decimal           @db.Decimal(12, 2)
+
+  @@index([quotationId])
+  @@map("supplier_quotation_items")
+}
+
+model PurchaseOrder {
+  id                String             @id @default(uuid())
+  tenantId          String
+  tenant            Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branchId          String?
+  branch            Branch?            @relation(fields: [branchId], references: [id])
+  // Phase 1.9: optional warehouse attribution - the warehouse goods against
+  // this PO are expected to be received into. Validated via the existing
+  // assertWarehouseAccess on create.
+  warehouseId       String?
+  warehouse         Warehouse?         @relation(fields: [warehouseId], references: [id])
+  poNumber          String
+  supplierId        String
+  supplier          Supplier           @relation(fields: [supplierId], references: [id])
+  sourceQuotationId String?            @unique
+  sourceQuotation   SupplierQuotation? @relation(fields: [sourceQuotationId], references: [id])
+  status            ProcurementStatus  @default(DRAFT)
+  subtotal          Decimal            @default(0) @db.Decimal(12, 2)
+  discount          Decimal            @default(0) @db.Decimal(12, 2)
+  tax               Decimal            @default(0) @db.Decimal(12, 2)
+  total             Decimal            @default(0) @db.Decimal(12, 2)
+  notes             String?
+  createdById       String?
+  approvedById      String?
+  approvedAt        DateTime?
+  rejectionReason   String?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  items     PurchaseOrderItem[]
+  grns      GoodsReceipt[]
+  purchases Purchase[]
+
+  @@unique([tenantId, poNumber])
+  @@index([tenantId])
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderItem {
+  id               String        @id @default(uuid())
+  purchaseOrderId  String
+  purchaseOrder    PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  productId        String
+  product          Product       @relation(fields: [productId], references: [id])
+  quantity         Decimal       @db.Decimal(12, 2)
+  unitCost         Decimal       @db.Decimal(12, 2)
+  lineTotal        Decimal       @db.Decimal(12, 2)
+  receivedQuantity Decimal       @default(0) @db.Decimal(12, 2)
+
+  grnItems GoodsReceiptItem[]
+
+  @@index([purchaseOrderId])
+  @@map("purchase_order_items")
+}
+
+model GoodsReceipt {
+  id              String        @id @default(uuid())
+  tenantId        String
+  tenant          Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  purchaseOrderId String
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id])
+  // Phase 1.9: optional warehouse attribution - this is the actual physical
+  // receiving event, so it is the most important place in the procurement
+  // lifecycle for warehouse-level authorization (assertWarehouseAccess).
+  // Falls back to the linked PO's own warehouseId when not explicitly given
+  // (mirrors how Sale.branchId falls back to req.user.branchId).
+  warehouseId     String?
+  warehouse       Warehouse?    @relation(fields: [warehouseId], references: [id])
+  grnNumber       String
+  receivedById    String?
+  notes           String?
+  purchaseId      String?       @unique
+  purchase        Purchase?     @relation(fields: [purchaseId], references: [id])
+  // Client-generated key so a retried GRN submission (flaky connection) is
+  // recognized as the same receipt instead of double-crediting stock - same
+  // pattern used for Sale/Purchase/Customer/Supplier idempotencyKey.
+  idempotencyKey  String?
+  createdAt       DateTime      @default(now())
+
+  items GoodsReceiptItem[]
+
+  @@unique([tenantId, grnNumber])
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId, purchaseOrderId])
+  @@map("goods_receipts")
+}
+
+model GoodsReceiptItem {
+  id                  String            @id @default(uuid())
+  goodsReceiptId      String
+  goodsReceipt        GoodsReceipt      @relation(fields: [goodsReceiptId], references: [id], onDelete: Cascade)
+  purchaseOrderItemId String
+  purchaseOrderItem   PurchaseOrderItem @relation(fields: [purchaseOrderItemId], references: [id])
+  productId           String
+  product             Product           @relation(fields: [productId], references: [id])
+  receivedQuantity    Decimal           @db.Decimal(12, 2)
+  rejectedQuantity    Decimal           @default(0) @db.Decimal(12, 2)
+  damagedQuantity     Decimal           @default(0) @db.Decimal(12, 2)
+  note                String?
+
+  @@index([goodsReceiptId])
+  @@map("goods_receipt_items")
+}
+
+// ---------------------------------------------------------------------------
+// Phase 6 - Multi-Branch + Warehouse + Advanced Business Control
+// ---------------------------------------------------------------------------
+
+// A warehouse/store is a physical stock location, distinct from a Branch (a
+// business/sales location). branchId is nullable so a warehouse can be a
+// central/head-office facility not tied to any single branch, per the
+// required Tenant -> Branches -> Warehouses hierarchy. A tenant that never
+// creates one keeps behaving exactly as before Phase 6 - nothing forces a
+// small single-branch shop to adopt warehouses.
+model Warehouse {
+  id        String   @id @default(uuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branchId  String?
+  branch    Branch?  @relation(fields: [branchId], references: [id])
+  // Phase 0.3: optional, derived convenience field - backfilled from the
+  // warehouse's own branch's company where a branch is set; left null for a
+  // central/company-wide warehouse with no specific branch, matching the
+  // existing isCentral pattern rather than forcing every warehouse to name
+  // a company directly.
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  name      String
+  code      String?
+  isCentral Boolean  @default(false)
+  // Phase 1.3: explicit, administrator-visible/settable marker for "the"
+  // default warehouse for lazy stock assignment - previously only an
+  // implicit "first created" convention inside ensureDefaultWarehouse()
+  // (warehouseStock.js). Enforced as at-most-one-per-tenant in application
+  // code (warehouses.routes.js), the same way Company.isDefault (Phase 1.1)
+  // and Branch.isMain are already enforced without a DB-level constraint.
+  isDefault Boolean  @default(false)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  stocks           WarehouseStock[]
+  inventoryTxns    InventoryTransaction[]
+  transfersOut     StockTransfer[]        @relation("TransferSource")
+  transfersIn      StockTransfer[]        @relation("TransferDestination")
+  userAccess       UserWarehouseAccess[]
+  sales            Sale[]
+  purchases        Purchase[]
+  purchaseRequests PurchaseRequest[]
+  purchaseOrders   PurchaseOrder[]
+  goodsReceipts    GoodsReceipt[]
+  salesReturns     SalesReturn[]
+  purchaseReturns  PurchaseReturn[]
+  quotations       Quotation[]
+  salesOrders      SalesOrder[]
+  opticalOrders    OpticalOrder[]
+
+  @@index([tenantId])
+  @@map("warehouses")
+}
+
+// Per-warehouse stock level. Product.stockQuantity remains the
+// tenant-wide authoritative total used everywhere else in the app
+// (POS, reports, accounting COGS) - completely unchanged in meaning -
+// and is kept in sync with the sum of WarehouseStock rows whenever a
+// warehouse-scoped operation changes one. A product with no WarehouseStock
+// row anywhere is lazily assigned to the tenant's default warehouse the
+// first time warehouse-level detail is needed, carrying its full existing
+// Product.stockQuantity - the safe "assign to a default location without
+// losing quantities" migration strategy, done on-demand rather than as a
+// one-time bulk script.
+model WarehouseStock {
+  id                String    @id @default(uuid())
+  warehouseId       String
+  warehouse         Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  productId         String
+  product           Product   @relation(fields: [productId], references: [id])
+  quantity          Decimal   @default(0) @db.Decimal(12, 2)
+  lowStockThreshold Decimal?  @db.Decimal(12, 2)
+  reorderLevel      Decimal?  @db.Decimal(12, 2)
+  updatedAt         DateTime  @updatedAt
+
+  @@unique([warehouseId, productId])
+  @@index([productId])
+  @@map("warehouse_stocks")
+}
+
+enum TransferStatus {
+  REQUESTED
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+  IN_TRANSIT
+  COMPLETED
+  CANCELLED
+}
+
+model StockTransfer {
+  id                     String         @id @default(uuid())
+  tenantId               String
+  tenant                 Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  transferNumber         String
+  sourceWarehouseId      String
+  sourceWarehouse        Warehouse      @relation("TransferSource", fields: [sourceWarehouseId], references: [id])
+  destinationWarehouseId String
+  destinationWarehouse   Warehouse      @relation("TransferDestination", fields: [destinationWarehouseId], references: [id])
+  status                 TransferStatus @default(REQUESTED)
+  notes                  String?
+  requestedById          String?
+  approvedById           String?
+  approvedAt             DateTime?
+  rejectionReason        String?
+  dispatchedById         String?
+  dispatchedAt           DateTime?
+  receivedById           String?
+  receivedAt             DateTime?
+  // Client-generated key so a retried transfer request/dispatch/receive
+  // (flaky connection, offline retry) is recognized as the same operation
+  // instead of duplicating stock movement.
+  idempotencyKey         String?
+  createdAt              DateTime       @default(now())
+  updatedAt              DateTime       @updatedAt
+
+  items StockTransferItem[]
+
+  @@unique([tenantId, transferNumber])
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId])
+  @@index([tenantId, sourceWarehouseId])
+  @@index([tenantId, destinationWarehouseId])
+  @@map("stock_transfers")
+}
+
+model StockTransferItem {
+  id               String        @id @default(uuid())
+  stockTransferId  String
+  stockTransfer    StockTransfer @relation(fields: [stockTransferId], references: [id], onDelete: Cascade)
+  productId        String
+  product          Product       @relation(fields: [productId], references: [id])
+  quantity         Decimal       @db.Decimal(12, 2)
+  receivedQuantity Decimal       @default(0) @db.Decimal(12, 2)
+  shortQuantity    Decimal       @default(0) @db.Decimal(12, 2)
+  damagedQuantity  Decimal       @default(0) @db.Decimal(12, 2)
+
+  @@index([stockTransferId])
+  @@map("stock_transfer_items")
+}
+
+// A user's *primary* branch (User.branchId, unchanged from Phase 4) still
+// works exactly as before. This table adds optional *additional* branch
+// access for staff who need visibility into more than one branch without
+// being a full MANAGEMENT role - e.g. a store keeper covering two nearby
+// branches. TENANT_ADMIN/MANAGER remain unrestricted regardless of this
+// table, per "Managers may have branch-wide permissions" / "Tenant
+// Admin/Owner may access all branches".
+model UserBranchAccess {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  branchId  String
+  branch    Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, branchId])
+  @@map("user_branch_access")
+}
+
+// ---------------------------------------------------------------------------
+// Phase 7 - Advanced Optical + Eye Clinic + CRM
+// ---------------------------------------------------------------------------
+
+// A Patient IS a Customer with a clinical profile attached - never a
+// duplicate identity. Not every Customer has one; a pure retail buyer with
+// no clinical history stays a plain Customer forever.
+model Patient {
+  id                    String    @id @default(uuid())
+  tenantId              String
+  tenant                Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customerId            String    @unique
+  customer              Customer  @relation(fields: [customerId], references: [id])
+  patientNumber         String
+  dateOfBirth           DateTime?
+  gender                String?
+  emergencyContactName  String?
+  emergencyContactPhone String?
+  bloodGroup            String?
+  allergies             String?
+  medicalHistory        String?
+  isActive              Boolean   @default(true)
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  appointments  Appointment[]
+  examinations  Examination[]
+  prescriptions ClinicalPrescription[]
+  opticalOrders OpticalOrder[]
+
+  @@unique([tenantId, patientNumber])
+  @@index([tenantId])
+  @@map("patients")
+}
+
+// A Doctor/provider profile - optionally linked to a User login (a visiting
+// or reference-only doctor may have a profile without ever logging in).
+model Doctor {
+  id                        String   @id @default(uuid())
+  tenantId                  String
+  tenant                    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId                    String?  @unique
+  user                      User?    @relation(fields: [userId], references: [id])
+  branchId                  String?
+  branch                    Branch?  @relation(fields: [branchId], references: [id])
+  name                      String
+  specialty                 String?
+  designation               String?
+  // Simple, practice-configurable weekly availability - kept as JSON rather
+  // than a rigid schema so different clinics' scheduling patterns fit
+  // without a migration each time (e.g. {"mon":["09:00-13:00"], ...}).
+  availability              Json?
+  appointmentCapacityPerDay Int?
+  isActive                  Boolean  @default(true)
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+
+  appointments  Appointment[]
+  examinations  Examination[]
+  prescriptions ClinicalPrescription[]
+
+  @@index([tenantId])
+  @@map("doctors")
+}
+
+enum AppointmentStatus {
+  SCHEDULED
+  CONFIRMED
+  ARRIVED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+model Appointment {
+  id              String            @id @default(uuid())
+  tenantId        String
+  tenant          Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branchId        String?
+  branch          Branch?           @relation(fields: [branchId], references: [id])
+  patientId       String
+  patient         Patient           @relation(fields: [patientId], references: [id])
+  doctorId        String?
+  doctor          Doctor?           @relation(fields: [doctorId], references: [id])
+  appointmentType String?
+  scheduledAt     DateTime
+  durationMinutes Int               @default(30)
+  status          AppointmentStatus @default(SCHEDULED)
+  tokenNumber     Int?
+  notes           String?
+  // A follow-up appointment references the visit that generated it, without
+  // being a different kind of record - keeps the whole visit chain visible
+  // from either end.
+  followUpOfId    String?
+  followUpOf      Appointment?      @relation("AppointmentFollowUp", fields: [followUpOfId], references: [id])
+  followUps       Appointment[]     @relation("AppointmentFollowUp")
+  idempotencyKey  String?
+  createdById     String?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  examination Examination?
+  // Phase 5.2: Sale rows (e.g. a consultation fee) that were billed against this visit.
+  sales       Sale[]
+
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId, scheduledAt])
+  @@index([tenantId, doctorId, scheduledAt])
+  @@index([tenantId, patientId])
+  @@map("appointments")
+}
+
+// One structured examination/refraction record. Never edited into a
+// different clinical outcome after the fact - corrections happen via a new
+// ClinicalPrescription version, not by rewriting this row.
+model Examination {
+  id            String       @id @default(uuid())
+  tenantId      String
+  tenant        Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  patientId     String
+  patient       Patient      @relation(fields: [patientId], references: [id])
+  doctorId      String?
+  doctor        Doctor?      @relation(fields: [doctorId], references: [id])
+  appointmentId String?      @unique
+  appointment   Appointment? @relation(fields: [appointmentId], references: [id])
+  examDate      DateTime     @default(now())
+
+  // Visual acuity - free-form (e.g. "6/6", "20/40") since notation varies
+  // by practice/region rather than a single numeric scale.
+  vaOdDistance String?
+  vaOsDistance String?
+  vaOdNear     String?
+  vaOsNear     String?
+
+  odSphere   Decimal? @db.Decimal(5, 2)
+  odCylinder Decimal? @db.Decimal(5, 2)
+  odAxis     Int?
+  odAdd      Decimal? @db.Decimal(5, 2)
+  osSphere   Decimal? @db.Decimal(5, 2)
+  osCylinder Decimal? @db.Decimal(5, 2)
+  osAxis     Int?
+  osAdd      Decimal? @db.Decimal(5, 2)
+  pd         Decimal? @db.Decimal(5, 2)
+
+  clinicalNotes   String?
+  diagnosis       String?
+  treatmentAdvice String?
+  followUpDate    DateTime?
+  createdById     String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  prescriptions ClinicalPrescription[]
+
+  @@index([tenantId, patientId])
+  @@map("examinations")
+}
+
+// The versioned, patient-linked "master" prescription - deliberately a
+// different model from the existing OpticalOrder-embedded Prescription
+// (which is an unchanged, order-time snapshot). A correction never
+// overwrites a row: it creates a new one linked via supersedesId, and the
+// old one is marked inactive but never deleted.
+model ClinicalPrescription {
+  id            String                @id @default(uuid())
+  tenantId      String
+  tenant        Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  patientId     String
+  patient       Patient               @relation(fields: [patientId], references: [id])
+  examinationId String?
+  examination   Examination?          @relation(fields: [examinationId], references: [id])
+  doctorId      String?
+  doctor        Doctor?               @relation(fields: [doctorId], references: [id])
+  version       Int                   @default(1)
+  supersedesId  String?               @unique
+  supersedes    ClinicalPrescription? @relation("PrescriptionCorrection", fields: [supersedesId], references: [id])
+  supersededBy  ClinicalPrescription? @relation("PrescriptionCorrection")
+  issueDate     DateTime              @default(now())
+
+  odSphere           Decimal? @db.Decimal(5, 2)
+  odCylinder         Decimal? @db.Decimal(5, 2)
+  odAxis             Int?
+  odAdd              Decimal? @db.Decimal(5, 2)
+  osSphere           Decimal? @db.Decimal(5, 2)
+  osCylinder         Decimal? @db.Decimal(5, 2)
+  osAxis             Int?
+  osAdd              Decimal? @db.Decimal(5, 2)
+  pd                 Decimal? @db.Decimal(5, 2)
+  lensRecommendation String?
+  notes              String?
+  // false once a newer version supersedes it - the row itself is never
+  // deleted or rewritten.
+  isActive           Boolean  @default(true)
+  createdById        String?
+  createdAt          DateTime @default(now())
+
+  opticalOrders OpticalOrder[]
+
+  @@index([tenantId, patientId])
+  @@map("clinical_prescriptions")
+}
+
+enum LabType {
+  IN_HOUSE
+  THIRD_PARTY
+}
+
+model Lab {
+  id           String   @id @default(uuid())
+  tenantId     String
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name         String
+  type         LabType  @default(IN_HOUSE)
+  contactPhone String?
+  contactEmail String?
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  opticalOrders OpticalOrder[]
+
+  @@index([tenantId])
+  @@map("labs")
+}
+
+// ---------------------------------------------------------------------------
+// Phase 8 - WhatsApp + Automation + Customer Portal
+// ---------------------------------------------------------------------------
+
+enum MessageChannel {
+  WHATSAPP
+  IN_APP
+  EMAIL
+}
+
+enum MessageStatus {
+  QUEUED
+  SENDING
+  SENT
+  DELIVERED
+  READ
+  FAILED
+  CANCELLED
+}
+
+// Tenant-level WhatsApp/communication configuration. `provider` names which
+// implementation of the provider-agnostic interface (see
+// backend/src/modules/communication/providers/) to use - "mock" ships as
+// the safe default (no external network calls, no real credentials
+// required) so a tenant can trial automations before connecting a real
+// WhatsApp Business API account. `credentials` is never returned by any
+// API response.
+model CommunicationConfig {
+  id                                   String   @id @default(uuid())
+  tenantId                             String   @unique
+  tenant                               Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  provider                             String   @default("mock")
+  credentials                          Json?
+  isEnabled                            Boolean  @default(true)
+  businessHoursStart                   Int?
+  businessHoursEnd                     Int?
+  maxCampaignMessagesPerCustomerPerDay Int      @default(1)
+  senderLabel                          String?
+  createdAt                            DateTime @default(now())
+  updatedAt                            DateTime @updatedAt
+
+  @@map("communication_configs")
+}
+
+enum TemplateType {
+  INVOICE_RECEIPT
+  PAYMENT_RECEIPT
+  PAYMENT_REMINDER
+  CUSTOMER_STATEMENT
+  OPTICAL_ORDER_CONFIRMATION
+  OPTICAL_ORDER_STATUS_UPDATE
+  OPTICAL_JOB_READY
+  OPTICAL_ORDER_DELIVERED
+  APPOINTMENT_CONFIRMATION
+  APPOINTMENT_REMINDER
+  APPOINTMENT_CANCELLED
+  FOLLOW_UP_REMINDER
+  PRESCRIPTION_SUMMARY
+  PROMOTIONAL
+  CUSTOM
+}
+
+model MessageTemplate {
+  id         String         @id @default(uuid())
+  tenantId   String
+  tenant     Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  type       TemplateType
+  name       String
+  channel    MessageChannel @default(WHATSAPP)
+  // {{placeholders}} rendered at send time - see communication/render.js.
+  body       String
+  // Whether this template is provider-approved (WhatsApp Business API
+  // typically requires pre-approval for template messages) - defaults true
+  // under the mock provider, meaningful once a real provider is configured.
+  isApproved Boolean        @default(true)
+  isActive   Boolean        @default(true)
+  isSystem   Boolean        @default(false)
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+
+  messages        Message[]
+  automationRules AutomationRule[]
+
+  @@unique([tenantId, type, name])
+  @@index([tenantId])
+  @@map("message_templates")
+}
+
+// The message queue and permanent log in one table - a message is created
+// QUEUED and transitions forward only (see communication/queue.js).
+model Message {
+  id                String           @id @default(uuid())
+  tenantId          String
+  tenant            Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branchId          String?
+  branch            Branch?          @relation(fields: [branchId], references: [id])
+  channel           MessageChannel   @default(WHATSAPP)
+  customerId        String?
+  customer          Customer?        @relation(fields: [customerId], references: [id])
+  // Snapshot of the destination at send time - kept even if the customer's
+  // phone changes later, so history stays accurate.
+  recipientPhone    String?
+  templateId        String?
+  template          MessageTemplate? @relation(fields: [templateId], references: [id])
+  body              String
+  status            MessageStatus    @default(QUEUED)
+  providerMessageId String?
+  failureReason     String?
+  retryCount        Int              @default(0)
+  nextRetryAt       DateTime?
+  // Prevents a re-synced/retried business event from ever queuing the same
+  // message twice.
+  idempotencyKey    String?
+  sourceEventType   String?
+  sourceId          String?
+  triggeredByUserId String?
+  triggeredByUser   User?            @relation(fields: [triggeredByUserId], references: [id])
+  automationRuleId  String?
+  automationRule    AutomationRule?  @relation(fields: [automationRuleId], references: [id])
+  queuedAt          DateTime         @default(now())
+  sentAt            DateTime?
+  deliveredAt       DateTime?
+  readAt            DateTime?
+
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId, status])
+  @@index([tenantId, customerId])
+  @@index([tenantId, queuedAt])
+  @@index([tenantId, branchId])
+  @@map("messages")
+}
+
+enum AutomationEvent {
+  SALE_COMPLETED
+  PAYMENT_RECEIVED
+  INVOICE_OVERDUE
+  OPTICAL_ORDER_CREATED
+  OPTICAL_JOB_READY
+  OPTICAL_ORDER_DELIVERED
+  OPTICAL_JOB_DELAYED
+  APPOINTMENT_BOOKED
+  APPOINTMENT_APPROACHING
+  APPOINTMENT_NO_SHOW
+  STOCK_LOW
+  EXPIRY_APPROACHING
+  PURCHASE_APPROVED
+  TRANSFER_COMPLETED
+  CUSTOMER_INACTIVE
+  DAILY_CLOSE
+  // Phase 1.15: a curated, high-value subset of the task's suggested event
+  // list - covering the major mutation points added in Phase 1.11-1.14 that
+  // had no automation/notification hook at all before this phase. Not every
+  // suggested event was added (e.g. "Purchase created/received" and "Stock
+  // adjustment" have no wired call site here - see this phase's report,
+  // Known Limitations/Deferred Items for the explicit reasoning).
+  SALE_CANCELLED
+  PAYMENT_REVERSED
+  EXPENSE_CREATED
+  EXPENSE_REVERSED
+  RETURN_CREATED
+  CREDIT_NOTE_CREATED
+  DEBIT_NOTE_CREATED
+  QUOTATION_ACCEPTED
+  SALES_ORDER_CONFIRMED
+  SALES_ORDER_CANCELLED
+}
+
+enum AutomationActionType {
+  WHATSAPP_MESSAGE
+  IN_APP_NOTIFICATION
+  DASHBOARD_ALERT
+}
+
+model AutomationRule {
+  id           String               @id @default(uuid())
+  tenantId     String
+  tenant       Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  event        AutomationEvent
+  name         String
+  // Safe, narrow condition fields only (branchId, minAmount, dueDays, etc.)
+  // - never arbitrary code, per "safe configurable fields".
+  conditions   Json?
+  actionType   AutomationActionType @default(WHATSAPP_MESSAGE)
+  templateId   String?
+  template     MessageTemplate?     @relation(fields: [templateId], references: [id])
+  delayMinutes Int                  @default(0)
+  isEnabled    Boolean              @default(true)
+  isSystem     Boolean              @default(false)
+  createdById  String?
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+
+  executions AutomationExecution[]
+  messages   Message[]
+
+  @@index([tenantId, event])
+  @@map("automation_rules")
+}
+
+enum AutomationExecutionStatus {
+  SUCCESS
+  FAILED
+  SKIPPED
+}
+
+// One row per (rule, source record) - the unique constraint below is the
+// actual duplicate-prevention mechanism: a business event that fires twice
+// (e.g. an offline transaction that syncs more than once) for the same
+// source record can only ever execute a given rule once.
+model AutomationExecution {
+  id               String                    @id @default(uuid())
+  tenantId         String
+  tenant           Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  automationRuleId String
+  automationRule   AutomationRule            @relation(fields: [automationRuleId], references: [id])
+  event            AutomationEvent
+  sourceId         String?
+  status           AutomationExecutionStatus
+  error            String?
+  messageId        String?
+  createdAt        DateTime                  @default(now())
+
+  @@unique([tenantId, automationRuleId, sourceId])
+  @@index([tenantId, event])
+  @@map("automation_executions")
+}
+
+enum NotificationPriority {
+  LOW
+  NORMAL
+  HIGH
+  CRITICAL
+}
+
+// Internal, in-app notification center. One row per recipient user -
+// role-aware delivery means creating one row per user whose role matches
+// at the moment the alert fires, not a single broadcast row. Duplicate
+// prevention is NOT a field on this model - it is enforced one layer up, by
+// AutomationExecution's own @@unique([tenantId, automationRuleId,
+// sourceId]) guard in triggerEvent() (communication/automation.js) - a
+// second, overlapping dedup key here would just be redundant with (and
+// could silently disagree with) that existing, already-tested guarantee.
+model Notification {
+  id             String               @id @default(uuid())
+  tenantId       String
+  tenant         Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  // Phase 1.15: optional branch attribution. NULL means tenant-wide (every
+  // pre-existing row, and every notification not tied to one branch's
+  // activity, e.g. DAILY_CLOSE) - a branch-restricted recipient always sees
+  // these. A non-null value scopes visibility to users who can access that
+  // branch (see notifications.routes.js's branch-aware WHERE clause and
+  // createRoleNotifications' matching recipient filter) - this is the fix
+  // for the pre-existing gap this phase's audit found: a role-targeted
+  // alert about one branch's stock/transfer/purchase event was previously
+  // visible to every tenant user with that role, regardless of branch.
+  branchId       String?
+  branch         Branch?              @relation(fields: [branchId], references: [id])
+  userId         String
+  user           User                 @relation(fields: [userId], references: [id])
+  type           String
+  title          String
+  body           String?
+  // Structured deep-link target, additive alongside the pre-existing `link`
+  // (a raw URL/path string, unchanged in meaning) - lets a caller/consumer
+  // query "every notification about this Sale" without parsing `link`.
+  entityType     String?
+  entityId       String?
+  link           String?
+  priority       NotificationPriority @default(NORMAL)
+  isRead         Boolean              @default(false)
+  readAt         DateTime?
+  // In-app notifications have no real "in transit" state (the row's
+  // existence IS the delivery), so this defaults to DELIVERED immediately -
+  // present mainly so a future non-in-app channel (push/email/SMS) fanned
+  // out from the same event can record its own outcome per recipient
+  // without a schema change, not because in-app delivery is ever uncertain.
+  channel        String               @default("IN_APP")
+  deliveryStatus String               @default("DELIVERED")
+  expiresAt      DateTime?
+  createdAt      DateTime             @default(now())
+
+  @@index([tenantId, userId, isRead])
+  @@index([tenantId, userId, createdAt])
+  @@index([tenantId, entityType, entityId])
+  @@map("notifications")
+}
+
+model CustomerCommunicationPreference {
+  id                String   @id @default(uuid())
+  customerId        String   @unique
+  customer          Customer @relation(fields: [customerId], references: [id])
+  whatsappOptOut    Boolean  @default(false)
+  promotionalOptOut Boolean  @default(false)
+  preferences       Json?
+  updatedAt         DateTime @updatedAt
+
+  @@map("customer_communication_preferences")
+}
+
+// Customer Portal identity - deliberately separate from the staff `User`
+// model (a customer is never a tenant staff member) and from OTP records
+// (which are short-lived and rotate). One account per Customer.
+model CustomerPortalAccount {
+  id           String    @id @default(uuid())
+  tenantId     String
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customerId   String    @unique
+  customer     Customer  @relation(fields: [customerId], references: [id])
+  passwordHash String?
+  isActive     Boolean   @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  otps CustomerPortalOtp[]
+
+  @@index([tenantId])
+  @@map("customer_portal_accounts")
+}
+
+// Short-lived OTP codes for portal login/verification - hashed, single-use,
+// attempt-limited.
+model CustomerPortalOtp {
+  id         String                @id @default(uuid())
+  accountId  String
+  account    CustomerPortalAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  codeHash   String
+  expiresAt  DateTime
+  consumedAt DateTime?
+  attempts   Int                   @default(0)
+  createdAt  DateTime              @default(now())
+
+  @@index([accountId])
+  @@map("customer_portal_otps")
+}
+
+// ---------------------------------------------------------------------------
+// Phase 9 - AI Business Intelligence + Predictive Analytics
+// ---------------------------------------------------------------------------
+// AI never stores or duplicates core business data - these tables hold only
+// AI configuration, conversation history, generated insights/forecasts, and
+// usage tracking. Every query that builds AI context is tenant/branch/role
+// scoped BEFORE this data is touched (see src/modules/ai/context.js); these
+// rows are the *output* of that process, never a copy of source records.
+
+// Per-tenant AI settings. `credentials` (a future real provider's API key)
+// is never returned by the API, mirroring CommunicationConfig from Phase 8.
+model AiConfig {
+  id                String   @id @default(uuid())
+  tenantId          String   @unique
+  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  isEnabled         Boolean  @default(true)
+  // "deterministic" is the zero-configuration, zero-network default (a
+  // rule-based/statistical engine - see providers/deterministicProvider.js);
+  // a real hosted LLM can be registered as an additional provider later
+  // purely for phrasing/summarization, never for the underlying numbers.
+  provider          String   @default("deterministic")
+  credentials       Json?
+  dailyRequestLimit Int      @default(200)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@map("ai_configs")
+}
+
+enum AiConversationScope {
+  BUSINESS_ASSISTANT
+}
+
+model AiConversation {
+  id        String              @id @default(uuid())
+  tenantId  String
+  tenant    Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User                @relation(fields: [userId], references: [id])
+  scope     AiConversationScope @default(BUSINESS_ASSISTANT)
+  title     String?
+  createdAt DateTime            @default(now())
+  updatedAt DateTime            @updatedAt
+
+  messages AiMessage[]
+
+  @@index([tenantId, userId])
+  @@map("ai_conversations")
+}
+
+enum AiMessageRole {
+  USER
+  ASSISTANT
+}
+
+model AiMessage {
+  id             String         @id @default(uuid())
+  conversationId String
+  conversation   AiConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           AiMessageRole
+  content        String
+  // The exact deterministic facts/metrics used to ground this answer -
+  // always populated for an ASSISTANT message, always null for a USER one.
+  grounding      Json?
+  intent         String?
+  confidence     Float?
+  createdAt      DateTime       @default(now())
+
+  @@index([conversationId])
+  @@map("ai_messages")
+}
+
+enum AiInsightType {
+  FORECAST
+  ANOMALY
+  RECOMMENDATION
+  BRIEF
+}
+
+enum AiInsightSeverity {
+  URGENT
+  ATTENTION
+  OPPORTUNITY
+  INFORMATION
+}
+
+enum AiInsightStatus {
+  NEW
+  ACKNOWLEDGED
+  DISMISSED
+}
+
+model AiInsight {
+  id                String             @id @default(uuid())
+  tenantId          String
+  tenant            Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branchId          String?
+  branch            Branch?            @relation(fields: [branchId], references: [id])
+  type              AiInsightType
+  category          String
+  severity          AiInsightSeverity
+  title             String
+  summary           String
+  // The deterministic numbers backing this insight - always shown alongside
+  // it in the UI so a claim is never presented without its source data.
+  evidence          Json
+  recommendedAction String?
+  confidence        Float?
+  scopeFrom         DateTime?
+  scopeTo           DateTime?
+  sourceType        String?
+  sourceId          String?
+  status            AiInsightStatus    @default(NEW)
+  acknowledgedById  String?
+  acknowledgedAt    DateTime?
+  dismissedById     String?
+  dismissedAt       DateTime?
+  // Repeated-noise reduction: regenerating the same (category + source)
+  // combination updates this row via upsert rather than creating a duplicate.
+  dedupeKey         String
+  createdAt         DateTime           @default(now())
+  // Phase 0.7 (Owner Mobile): the last time this insight was pushed to the
+  // owner's device, and at what severity - lets push/pushService.js re-notify
+  // if the severity later escalates (e.g. ATTENTION -> URGENT) without
+  // re-sending an unchanged insight on every scan.
+  notifiedAt        DateTime?
+  notifiedSeverity  AiInsightSeverity?
+
+  feedback AiFeedback[]
+
+  @@unique([tenantId, dedupeKey])
+  @@index([tenantId, status])
+  @@index([tenantId, type])
+  @@map("ai_insights")
+}
+
+enum AiForecastScope {
+  TENANT
+  BRANCH
+  CATEGORY
+  PRODUCT
+}
+
+enum AiForecastGranularity {
+  DAILY
+  WEEKLY
+  MONTHLY
+}
+
+model AiForecast {
+  id             String                @id @default(uuid())
+  tenantId       String
+  tenant         Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  scope          AiForecastScope
+  scopeId        String?
+  granularity    AiForecastGranularity
+  method         String
+  dataPointsUsed Int
+  // [{ date, actual: number|null, forecast, lowerBound, upperBound }] -
+  // always carries history alongside the projection, never a bare series.
+  series         Json
+  generatedAt    DateTime              @default(now())
+  generatedById  String?
+
+  @@index([tenantId, scope, scopeId])
+  @@map("ai_forecasts")
+}
+
+// One row per AI-assistant/brief/forecast invocation - the basis for the
+// usage/cost report and per-tenant daily quota enforcement.
+model AiUsageLog {
+  id             String   @id @default(uuid())
+  tenantId       String
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId         String?
+  feature        String
+  provider       String
+  requestTokens  Int?
+  responseTokens Int?
+  costEstimate   Decimal? @db.Decimal(10, 4)
+  createdAt      DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+  @@map("ai_usage_logs")
+}
+
+model AiFeedback {
+  id        String     @id @default(uuid())
+  tenantId  String
+  tenant    Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User       @relation(fields: [userId], references: [id])
+  insightId String?
+  insight   AiInsight? @relation(fields: [insightId], references: [id])
+  messageId String?
+  helpful   Boolean
+  comment   String?
+  createdAt DateTime   @default(now())
+
+  @@index([tenantId, insightId])
+  @@map("ai_feedback")
+}
+
+// ---------------------------------------------------------------------------
+// Phase 0.7 - Owner Mobile (Android) push notifications & preferences.
+// These three models plus AiInsight.notifiedAt/notifiedSeverity above were
+// already written and migrated (migrations/20260915105019_phase3_owner_mobile_alerts_push)
+// during the earlier, paused Owner Mobile work, but had never been declared
+// here - the migration SQL created these tables directly, leaving the Prisma
+// Client unaware of them (see docs/phase0-7-owner-android-compatibility-verification-report.md
+// for how this drift was found and closed). Declaring them now makes the
+// schema match what the migration already put in the database; it does not
+// by itself expose any new API surface (the Owner Mobile routers remain a
+// deliberate, separate decision - see app.js).
+// ---------------------------------------------------------------------------
+
+enum PushPlatform {
+  ANDROID
+}
+
+enum MinimumAlertPriority {
+  CRITICAL_ONLY
+  IMPORTANT_PLUS
+  ALL
+}
+
+model DeviceToken {
+  id         String       @id @default(uuid())
+  tenantId   String
+  tenant     Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token      String
+  platform   PushPlatform @default(ANDROID)
+  isActive   Boolean      @default(true)
+  lastSeenAt DateTime     @default(now())
+  createdAt  DateTime     @default(now())
+
+  @@unique([tenantId, token])
+  @@index([tenantId, userId])
+  @@map("device_tokens")
+}
+
+model UserNotificationPreference {
+  id                          String               @id @default(uuid())
+  tenantId                    String
+  tenant                      Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId                      String               @unique
+  user                        User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  dailySummaryEnabled         Boolean              @default(true)
+  dailySummaryTime            String               @default("08:00")
+  salesAlertsEnabled          Boolean              @default(true)
+  profitAlertsEnabled         Boolean              @default(true)
+  receivableAlertsEnabled     Boolean              @default(true)
+  inventoryAlertsEnabled      Boolean              @default(true)
+  expenseAnomalyAlertsEnabled Boolean              @default(true)
+  minimumPriority             MinimumAlertPriority @default(ALL)
+  lastDailySummarySentAt      DateTime?
+  createdAt                   DateTime             @default(now())
+  updatedAt                   DateTime             @updatedAt
+
+  @@map("user_notification_preferences")
+}
+
+model PushConfig {
+  id          String   @id @default(uuid())
+  tenantId    String   @unique
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  provider    String   @default("mock")
+  credentials Json?
+  isEnabled   Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("push_configs")
+}

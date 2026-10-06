@@ -1,0 +1,56 @@
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      # SECURITY: override with a real POSTGRES_PASSWORD env var for any
+      # deployment beyond local dev - this default is public (it's in this
+      # file) and grants full database access if the port is ever reachable.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: akvisionflow
+    ports:
+      - "5432:5432"
+    volumes:
+      - akvisionflow_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/akvisionflow?schema=public
+      DIRECT_URL: postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/akvisionflow?schema=public
+      # SECURITY: this fallback is public (it's in this file) - always set a
+      # real JWT_SECRET env var for any deployment beyond local dev. Anyone
+      # who deploys with the default can forge valid tokens for any tenant.
+      JWT_SECRET: ${JWT_SECRET:-change-this-to-a-long-random-string}
+      JWT_EXPIRES_IN: 8h
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080}
+    ports:
+      - "4000:4000"
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:4000/api}
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "8080:80"
+
+volumes:
+  akvisionflow_pgdata:

@@ -1,0 +1,17 @@
+{
+  "item": {
+    "id": "8b084d8e-5e4c-4ae0-a785-48667403c150",
+    "tenantId": "7b3190e5-8867-4601-b869-6991e181f61d",
+    "branchId": null,
+    "warehouseId": null,
+    "requestNumber": "PR-000001",
+    "status": "APPROVED",
+    "notes": null,
+    "requestedById": "8d6f4cfb-e2ad-4ac2-b51d-74197ac1844f",
+    "approvedById": "8d6f4cfb-e2ad-4ac2-b51d-74197ac1844f",
+    "approvedAt": "2026-09-26T08:39:47.241Z",
+    "rejectionReason": null,
+    "createdAt": "2026-09-26T08:39:45.317Z",
+    "updatedAt": "2026-09-26T08:39:47.244Z"
+  }
+}

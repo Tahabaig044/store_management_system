@@ -1,0 +1,87 @@
+name: Neon Production Backup
+
+# Independent, off-site backup of the live Neon production database. This is
+# deliberately the ONLY thing this workflow does: it connects with a
+# read-only role (BACKUP_DATABASE_URL, a backup_reader connection string)
+# and runs pg_dump. There is no checkout step - the application source code
+# is never present in this job - so there is no way for this workflow to run
+# migrations, Prisma commands, or any application code against production.
+# pg_dump itself only issues read (SELECT/COPY) queries; it never mutates
+# the source database.
+
+on:
+  schedule:
+    # 02:00 UTC daily - off-peak for a single-timezone shop, and far from any
+    # other scheduled job in this repo.
+    - cron: '0 2 * * *'
+  workflow_dispatch: {}
+
+jobs:
+  backup:
+    name: Backup production Neon database (read-only)
+    runs-on: ubuntu-latest
+    # postgres:18 ships pg_dump matching the production server's major
+    # version (Neon is PostgreSQL 18) exactly, with bash already present -
+    # avoids any apt-get version-mismatch risk on the default runner image.
+    container:
+      image: postgres:18
+    env:
+      BACKUP_DATABASE_URL: ${{ secrets.BACKUP_DATABASE_URL }}
+    steps:
+      - name: Verify the backup secret is configured
+        run: |
+          set -euo pipefail
+          if [ -z "${BACKUP_DATABASE_URL:-}" ]; then
+            echo "::error::BACKUP_DATABASE_URL secret is not set. Cannot proceed."
+            exit 1
+          fi
+          echo "Backup connection secret is present (value withheld from logs)."
+
+      - name: Compute backup filename
+        id: meta
+        run: |
+          set -euo pipefail
+          filename="ak-visionflow-neon-$(date -u +%Y-%m-%d-%H-%M).dump"
+          echo "filename=${filename}" >> "$GITHUB_OUTPUT"
+          echo "timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - name: Run pg_dump (read-only, custom/compressed format)
+        run: |
+          set -euo pipefail
+          pg_dump "$BACKUP_DATABASE_URL" \
+            --format=custom \
+            --no-owner \
+            --no-privileges \
+            --file="${{ steps.meta.outputs.filename }}"
+
+      - name: Verify the backup file exists and is non-empty
+        id: verify
+        run: |
+          set -euo pipefail
+          file="${{ steps.meta.outputs.filename }}"
+          if [ ! -f "$file" ]; then
+            echo "::error::Backup file was not created: ${file}"
+            exit 1
+          fi
+          size=$(stat -c%s "$file")
+          if [ "$size" -eq 0 ]; then
+            echo "::error::Backup file is empty (0 bytes): ${file}"
+            exit 1
+          fi
+          echo "size=${size}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload backup as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.filename }}
+          path: ${{ steps.meta.outputs.filename }}
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Report result
+        run: |
+          set -euo pipefail
+          echo "backup created successfully"
+          echo "filename: ${{ steps.meta.outputs.filename }}"
+          echo "file size: ${{ steps.verify.outputs.size }} bytes"
+          echo "date/time (UTC): ${{ steps.meta.outputs.timestamp }}"

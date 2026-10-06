@@ -1,0 +1,87 @@
+{
+  "sales": {
+    "today": {
+      "total": 400,
+      "count": 3,
+      "changePercent": null
+    },
+    "yesterday": {
+      "total": 0,
+      "count": 0,
+      "changePercent": null
+    },
+    "week": {
+      "total": 400,
+      "count": 3,
+      "changePercent": null
+    },
+    "month": {
+      "total": 400,
+      "count": 3,
+      "changePercent": null
+    }
+  },
+  "profit": {
+    "grossProfit": 320,
+    "netProfit": -280,
+    "grossMarginPercent": 80,
+    "netMarginPercent": -70
+  },
+  "expenses": {
+    "today": {
+      "total": 600,
+      "changePercent": null
+    },
+    "month": {
+      "total": 600,
+      "changePercent": null
+    },
+    "byCategory": [
+      {
+        "categoryId": "dc5d3c90-c6e8-4f27-862d-74d8905c1956",
+        "categoryName": "Rent-1790340267701-wpwd2e",
+        "total": 600
+      }
+    ]
+  },
+  "receivables": {
+    "totalOutstanding": 30,
+    "overdueAmount": 0,
+    "recentCollections": 70
+  },
+  "orders": {
+    "today": {
+      "transactionCount": 3,
+      "averageTransactionValue": 133.33333333333334
+    },
+    "month": {
+      "transactionCount": 3,
+      "averageTransactionValue": 133.33333333333334
+    }
+  },
+  "inventory": {
+    "inventoryValue": 10220,
+    "lowStockCount": 0,
+    "outOfStockCount": 0,
+    "scope": "ALL_BRANCHES"
+  },
+  "purchases": {
+    "today": {
+      "total": 450,
+      "count": 2
+    },
+    "month": {
+      "total": 450,
+      "count": 2
+    }
+  },
+  "payables": {
+    "totalOutstanding": 300,
+    "overdueAmount": 0
+  },
+  "cash": {
+    "cash": -420,
+    "bank": 40,
+    "total": -380
+  }
+}

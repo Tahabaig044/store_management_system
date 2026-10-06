@@ -1,0 +1,54 @@
+{
+  "supplier": {
+    "id": "628462a4-e428-4e32-b296-7c81a868963b",
+    "tenantId": "7b3190e5-8867-4601-b869-6991e181f61d",
+    "name": "Zed Frames Ltd",
+    "phone": null,
+    "email": null,
+    "address": null,
+    "code": null,
+    "notes": null,
+    "isActive": true,
+    "idempotencyKey": null,
+    "createdAt": "2026-09-26T08:39:43.188Z",
+    "updatedAt": "2026-09-26T08:39:43.188Z"
+  },
+  "purchases": [
+    {
+      "id": "b173d831-d3b0-4407-bec7-6132b408c209",
+      "tenantId": "7b3190e5-8867-4601-b869-6991e181f61d",
+      "supplierId": "628462a4-e428-4e32-b296-7c81a868963b",
+      "branchId": "afc3ad20-e38d-4fce-bee4-470bb3cf58ef",
+      "warehouseId": null,
+      "purchaseNumber": "PO-000001",
+      "status": "RECEIVED",
+      "paymentStatus": "UNPAID",
+      "subtotal": "200",
+      "discount": "0",
+      "tax": "0",
+      "total": "200",
+      "amountPaid": "0",
+      "notes": null,
+      "receivedAt": "2026-09-26T08:39:45.028Z",
+      "createdById": "8d6f4cfb-e2ad-4ac2-b51d-74197ac1844f",
+      "idempotencyKey": null,
+      "purchaseOrderId": null,
+      "createdAt": "2026-09-26T08:39:45.028Z",
+      "updatedAt": "2026-09-26T08:39:45.051Z",
+      "items": [
+        {
+          "id": "f4b4ca9d-62d9-4fd8-84cc-d791d575d993",
+          "purchaseId": "b173d831-d3b0-4407-bec7-6132b408c209",
+          "productId": "20f0dcb6-c326-4152-8fbd-5dd890f931aa",
+          "variantId": null,
+          "quantity": "5",
+          "unitCost": "40",
+          "lineTotal": "200",
+          "returnedQuantity": "0"
+        }
+      ]
+    }
+  ],
+  "payments": [],
+  "balanceDue": 200
+}

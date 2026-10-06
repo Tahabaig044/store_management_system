@@ -1,0 +1,4 @@
+{
+  "error": "Only a pending request can be approved",
+  "code": "CONFLICT"
+}

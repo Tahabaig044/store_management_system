@@ -1,0 +1,42 @@
+{
+  "items": [
+    {
+      "id": "20f0dcb6-c326-4152-8fbd-5dd890f931aa",
+      "tenantId": "7b3190e5-8867-4601-b869-6991e181f61d",
+      "categoryId": null,
+      "type": "GENERAL",
+      "productKind": "PHYSICAL_GOOD",
+      "brand": null,
+      "brandId": null,
+      "name": "Ray Frame X",
+      "sku": "RF-X",
+      "barcode": "5551234",
+      "description": null,
+      "purchasePrice": "40",
+      "sellingPrice": "90",
+      "stockQuantity": "23",
+      "lowStockThreshold": "0",
+      "unit": "pcs",
+      "unitId": null,
+      "frameBrand": null,
+      "frameModel": null,
+      "frameColor": null,
+      "frameSize": null,
+      "lensType": null,
+      "lensMaterial": null,
+      "lensCoating": null,
+      "batchNumber": null,
+      "expiryDate": null,
+      "isActive": true,
+      "archivedAt": null,
+      "createdAt": "2026-09-26T08:39:43.602Z",
+      "updatedAt": "2026-09-26T08:39:45.083Z",
+      "category": null,
+      "opticalAttributes": null,
+      "medicineAttributes": null
+    }
+  ],
+  "total": 1,
+  "page": 1,
+  "pageSize": 20
+}

@@ -1,0 +1,45 @@
+{
+  "companies": [
+    {
+      "id": "e970d58a-7488-4a16-871e-3822e7145fc5",
+      "name": "Alpha Co-1790340266261-vc72sc"
+    },
+    {
+      "id": "75c90ce2-d8e6-485a-9712-06a634cd4838",
+      "name": "Beta Co-1790340266315-8dw9qv"
+    },
+    {
+      "id": "3f815404-cf12-46d2-9043-a51a799d5909",
+      "name": "Dash42-1790340264595-umx4z8"
+    }
+  ],
+  "branches": [
+    {
+      "id": "d388408b-a762-4353-882d-3e10285e3fa9",
+      "name": "A1-1790340266362-29s03h",
+      "companyId": "e970d58a-7488-4a16-871e-3822e7145fc5"
+    },
+    {
+      "id": "c6be9df5-c6ac-4d7f-8c1b-6b90adf3ed08",
+      "name": "A2-1790340266412-d6eiqn",
+      "companyId": "e970d58a-7488-4a16-871e-3822e7145fc5"
+    },
+    {
+      "id": "b2396239-715c-435b-bf0e-cf33d79cab82",
+      "name": "B1-1790340266468-zkhsz1",
+      "companyId": "75c90ce2-d8e6-485a-9712-06a634cd4838"
+    },
+    {
+      "id": "5061fcc9-42b9-41ab-a106-a753ff90821b",
+      "name": "Main Branch",
+      "companyId": "3f815404-cf12-46d2-9043-a51a799d5909"
+    }
+  ],
+  "categories": [],
+  "businessAreas": [
+    "GENERAL",
+    "MEDICINE",
+    "FRAME",
+    "LENS"
+  ]
+}
